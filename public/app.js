@@ -65,6 +65,7 @@
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
     csv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+    undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
   };
 
@@ -132,22 +133,59 @@
   }
 
   // ---------- toasts ----------
-  function toast(kind, title, text = '', ms = 4200) {
+  let toastSeq = 0;
+  function toast(kind, title, text = '', ms = 4200, action = null) {
     const box = $('#toasts');
-    const key = `${kind}|${title}|${text}`;
+    const key = action ? `act${++toastSeq}` : `${kind}|${title}|${text}`;
     const same = [...box.children].find((t) => t.dataset.key === key && !t.classList.contains('out'));
-    if (same) { clearTimeout(same._t); same._t = setTimeout(same._kill, ms); return; }
+    if (same) {
+      clearTimeout(same._t); same._t = setTimeout(same._kill, ms);
+      const bar = $('.bar', same); if (bar) bar.replaceWith(bar.cloneNode());
+      return;
+    }
     const el = document.createElement('div');
     el.className = `toast ${kind}`;
     el.dataset.key = key;
     const ic = { ok: '✓', low: '!', high: '↑', err: '✕' }[kind] || 'i';
-    el.innerHTML = `<div class="ic">${ic}</div><div><b>${esc(title)}</b>${text ? `<span>${esc(text)}</span>` : ''}</div>`;
+    el.innerHTML = `<div class="ic">${ic}</div><div class="tx"><b>${esc(title)}</b>${text ? `<span>${esc(text)}</span>` : ''}</div>
+      ${action ? `<button class="toast-act">${icon.undo}${esc(action.label)}</button>` : ''}<i class="bar" style="animation-duration:${ms}ms"></i>`;
     box.appendChild(el);
     el._kill = () => { el.classList.add('out'); setTimeout(() => el.remove(), 220); };
     el.onclick = el._kill;
     el._t = setTimeout(el._kill, ms);
-    const live = [...box.children].filter((t) => !t.classList.contains('out'));
-    if (live.length > 3) { clearTimeout(live[0]._t); live[0]._kill(); }
+    if (action) {
+      el._act = true;
+      $('.toast-act', el).onclick = (e) => { e.stopPropagation(); clearTimeout(el._t); el._kill(); action.run(); };
+    }
+    const older = [...box.children].filter((t) => t !== el && !t.classList.contains('out'));
+    if (older.length >= 3) { const v = older.find((t) => !t._act) || older[0]; clearTimeout(v._t); v._kill(); }
+  }
+  // a success toast with an Undo button (8 seconds to change your mind)
+  function undoable(title, text, undo) {
+    toast('ok', title, text, 8000, { label: 'Undo', run: async () => {
+      try { await undo(); } catch (e) { toast('err', 'Could not undo', e.message); }
+    } });
+  }
+  // stops double taps: the button shows a spinner until the request is done
+  async function busy(btn, fn) {
+    if (!btn || btn.classList.contains('is-busy')) return;
+    btn.classList.add('is-busy');
+    try { await fn(); } finally { btn.classList.remove('is-busy'); }
+  }
+  function countUp(root) {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    $$('[data-count]', root).forEach((el) => {
+      const end = Number(el.dataset.count);
+      if (!end) return;
+      const t0 = performance.now();
+      const step = (t) => {
+        if (!el.isConnected) return;
+        const k = Math.min(1, (t - t0) / 650);
+        el.textContent = fmt(end * (1 - Math.pow(1 - k, 3)));
+        if (k < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
   }
 
   // ---------- sheets (stackable modals) ----------
@@ -163,11 +201,14 @@
     return $('.sheet', ov);
   }
   function closeSheet(ov) {
-    ov = ov || $('#sheet-root').lastElementChild;
-    if (!ov) return;
-    ov.remove();
+    ov = ov || [...$('#sheet-root').children].reverse().find((o) => !o.classList.contains('closing'));
+    if (!ov || ov.classList.contains('closing')) return;
+    ov.classList.add('closing');
     ov._onClose && ov._onClose();
-    if (!$('#sheet-root').children.length) document.body.style.overflow = '';
+    setTimeout(() => {
+      ov.remove();
+      if (!$('#sheet-root').children.length) document.body.style.overflow = '';
+    }, 170);
   }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
   const sheetHead = (title) => `<div class="sheet-head"><div class="sheet-title">${title}</div><button class="icon-btn" data-close aria-label="Close">${icon.x}</button></div>`;
@@ -232,11 +273,15 @@
         <button class="tab tab-sell" id="btn-sell">${icon.plus}<span class="lbl">New sale</span></button>
         <button class="tab ${S.view === 'sales' ? 'active' : ''}" data-view="sales">${icon.receipt}<span class="lbl">Sales</span></button>
       </nav>`;
-    $$('[data-view]').forEach((b) => (b.onclick = () => { S.view = b.dataset.view; renderShell(); }));
+    $$('[data-view]').forEach((b) => (b.onclick = () => {
+      if (S.view !== b.dataset.view) { S.enter = true; window.scrollTo(0, 0); }
+      S.view = b.dataset.view; renderShell();
+    }));
     $('#btn-sell').onclick = () => openNewSale();
     $('#btn-settings').onclick = openSettings;
     $('#btn-logout').onclick = async () => { await api('/api/logout', { body: {} }).catch(() => {}); S.me = null; renderLogin(); };
     if (S.view === 'stock') renderStock(); else renderSales();
+    if (S.enter) { S.enter = false; $('#view').classList.add('enter'); countUp($('#view')); }
   }
 
   function refreshView(flash = []) {
@@ -254,10 +299,10 @@
 
     const kpis = `
       <section class="kpis">
-        <div class="kpi accent"><div class="kpi-label">In stock</div><div class="kpi-value num">${fmt(stats.in_stock)}<small>pcs</small></div><div class="kpi-foot">${plist.length} product${plist.length === 1 ? '' : 's'}</div></div>
-        <div class="kpi"><div class="kpi-label">Sold this month</div><div class="kpi-value num">${fmt(stats.month_pieces)}<small>pcs</small></div><div class="kpi-foot">${best ? `Top: ${esc(multi() ? best.product + ' ' : '')}${esc(best.color)} ${esc(best.size)} (${best.n})` : `${stats.month_sales} sales`}</div></div>
-        <div class="kpi"><div class="kpi-label">Revenue this month</div><div class="kpi-value num">${fmt(stats.month_revenue)}<small>${esc(cur())}</small></div><div class="kpi-foot">${stats.month_sales} sale${stats.month_sales === 1 ? '' : 's'}</div></div>
-        <div class="kpi ${stats.unpaid_amount ? 'warn' : ''}"><div class="kpi-label">Unpaid</div><div class="kpi-value num">${fmt(stats.unpaid_amount)}<small>${esc(cur())}</small></div><div class="kpi-foot">${stats.unpaid_count} sale${stats.unpaid_count === 1 ? '' : 's'} not paid yet</div></div>
+        <div class="kpi accent"><div class="kpi-label">In stock</div><div class="kpi-value num"><span data-count="${stats.in_stock}">${fmt(stats.in_stock)}</span><small>pcs</small></div><div class="kpi-foot">${plist.length} product${plist.length === 1 ? '' : 's'}</div></div>
+        <div class="kpi"><div class="kpi-label">Sold this month</div><div class="kpi-value num"><span data-count="${stats.month_pieces}">${fmt(stats.month_pieces)}</span><small>pcs</small></div><div class="kpi-foot">${best ? `Top: ${esc(multi() ? best.product + ' ' : '')}${esc(best.color)} ${esc(best.size)} (${best.n})` : `${stats.month_sales} sales`}</div></div>
+        <div class="kpi"><div class="kpi-label">Revenue this month</div><div class="kpi-value num"><span data-count="${stats.month_revenue}">${fmt(stats.month_revenue)}</span><small>${esc(cur())}</small></div><div class="kpi-foot">${stats.month_sales} sale${stats.month_sales === 1 ? '' : 's'}</div></div>
+        <div class="kpi ${stats.unpaid_amount ? 'warn' : ''}"><div class="kpi-label">Unpaid</div><div class="kpi-value num"><span data-count="${stats.unpaid_amount}">${fmt(stats.unpaid_amount)}</span><small>${esc(cur())}</small></div><div class="kpi-foot">${stats.unpaid_count} sale${stats.unpaid_count === 1 ? '' : 's'} not paid yet</div></div>
       </section>`;
 
     const tabs = `
@@ -267,7 +312,7 @@
       </div>`;
 
     if (!pid) {
-      $('#view').innerHTML = kpis + tabs + `<div class="empty"><b>No products yet</b>Add your first product — hoodies, t-shirts, shorts…<div style="margin-top:14px"><button class="btn primary" id="btn-first-product">${icon.plus}Add product</button></div></div>`;
+      $('#view').innerHTML = kpis + tabs + `<div class="empty"><div class="em-ic">${icon.box}</div><b>No products yet</b>Add your first product — hoodies, t-shirts, shorts…<div style="margin-top:14px"><button class="btn primary" id="btn-first-product">${icon.plus}Add product</button></div></div>`;
       $('#btn-add-product').onclick = () => openProductEditor();
       $('#btn-first-product').onclick = () => openProductEditor();
       return;
@@ -351,12 +396,21 @@
       <div class="label" style="margin-bottom:8px">Fix the count (after a manual check)</div>
       <div class="row"><input class="input num" type="number" min="0" inputmode="numeric" value="${q}" data-set /><button class="btn" data-save style="flex:0 0 auto">Save count</button></div>`);
     $('[data-sell]', sh).onclick = () => { closeSheet(); openNewSale({ product_id: p.id, color_id: cid, size_id: sid }); };
-    $('[data-save]', sh).onclick = async () => {
+    $('[data-save]', sh).onclick = (ev) => busy(ev.currentTarget, async () => {
+      const raw = $('[data-set]', sh).value.trim();
+      const n = Number(raw);
+      if (raw === '' || !Number.isInteger(n) || n < 0) { $('[data-set]', sh).focus(); return toast('err', 'Type the real count', 'A whole number, 0 or more'); }
+      if (n === q) return closeSheet();
       try {
-        const r = await api('/api/stock/set', { body: { color_id: cid, size_id: sid, qty: Number($('[data-set]', sh).value) } });
-        S.data = r.state; closeSheet(); refreshView([`${cid}:${sid}`]); toast('ok', 'Count updated', `${labelOf(cid, sid)} is now ${qtyOf(cid, sid)}`);
+        const r = await api('/api/stock/set', { body: { color_id: cid, size_id: sid, qty: n } });
+        S.data = r.state; closeSheet(); refreshView([`${cid}:${sid}`]);
+        const label = labelOf(cid, sid);
+        undoable('Count updated', `${label}: ${q} → ${n}`, async () => {
+          const u = await api('/api/stock/undo', { body: { items: [{ color_id: cid, size_id: sid, delta: q - n }], note: 'Undo count fix' } });
+          S.data = u.state; refreshView([`${cid}:${sid}`]); toast('ok', 'Undone', `${label} is back to ${qtyOf(cid, sid)}`);
+        });
       } catch (e) { toast('err', e.message); }
-    };
+    });
   }
 
   // ---------- PRODUCT EDITOR (add / edit / remove products, colors, sizes) ----------
@@ -484,8 +538,14 @@
       const pcs = totalOf(pid);
       const ok = await confirmSheet(`Remove ${p.name}?`, `${pcs ? `${pcs} pieces in stock will be hidden. ` : ''}Old sales and receipts are kept. You can restore it any time from Settings.`, 'Yes, remove', true);
       if (!ok) return;
-      try { const r = await api(`/api/products/${pid}/archive`, { body: { archived: true } }); S.data = r.state; S.pid = null; closeSheet(); refreshView(); toast('ok', `${p.name} removed`); }
-      catch (err) { toast('err', err.message); }
+      try {
+        const r = await api(`/api/products/${pid}/archive`, { body: { archived: true } });
+        S.data = r.state; S.pid = null; closeSheet(); refreshView();
+        undoable(`${p.name} removed`, 'Old sales and receipts are kept', async () => {
+          const u = await api(`/api/products/${pid}/archive`, { body: { archived: false } });
+          S.data = u.state; S.pid = pid; refreshView(); toast('ok', `${p.name} is back`);
+        });
+      } catch (err) { toast('err', err.message); }
     };
   }
 
@@ -512,24 +572,29 @@
       $$('[data-rp]', sh).forEach((b) => (b.onclick = () => { pid = +b.dataset.rp; sh.innerHTML = '<div class="sheet-grip"></div>' + render(); wire(); }));
       const save = $('[data-save]', sh);
       if (!save) return;
-      save.onclick = async () => {
-        const items = $$('input[data-c]', sh).filter((i) => Number(i.value) > 0).map((i) => ({ color_id: +i.dataset.c, size_id: +i.dataset.s, qty: Number(i.value) }));
+      save.onclick = () => busy(save, async () => {
+        const items = $$('input[data-c]', sh).filter((i) => Math.round(Number(i.value)) > 0).map((i) => ({ color_id: +i.dataset.c, size_id: +i.dataset.s, qty: Math.round(Number(i.value)) }));
         if (!items.length) return toast('err', 'Nothing to add', 'Type a number in at least one box');
         try {
           const r = await api('/api/restock', { body: { items, note: $('[data-note]', sh).value || (opening ? 'Opening stock' : '') } });
           S.data = r.state; S.pid = pid; closeSheet();
           const total = items.reduce((t, i) => t + i.qty, 0);
-          refreshView(items.map((i) => `${i.color_id}:${i.size_id}`));
-          toast('ok', `+${total} pieces added`, productById(pid).name);
+          const keys = items.map((i) => `${i.color_id}:${i.size_id}`);
+          const pname = productById(pid).name;
+          refreshView(keys);
+          undoable(`+${total} piece${total === 1 ? '' : 's'} added`, pname, async () => {
+            const u = await api('/api/stock/undo', { body: { items: items.map((i) => ({ color_id: i.color_id, size_id: i.size_id, delta: -i.qty })), note: 'Undo restock' } });
+            S.data = u.state; refreshView(keys); toast('ok', 'Restock undone', `${total} piece${total === 1 ? '' : 's'} taken back out · ${pname}`);
+          });
         } catch (e) { toast('err', e.message); }
-      };
+      });
     };
     wire();
   }
 
   // ---------- HISTORY ----------
   async function openHistory() {
-    const sh = openSheet(`${sheetHead('Stock history')}<div data-list><p class="muted">Loading…</p></div>`);
+    const sh = openSheet(`${sheetHead('Stock history')}<div data-list>${'<div class="skel sm"></div>'.repeat(6)}</div>`);
     try {
       const { movements } = await api('/api/movements');
       const why = { sale: 'Sold', cancel: 'Sale cancelled — back to stock', restock: 'Restock', adjust: 'Count fixed', opening: 'Opening stock' };
@@ -727,7 +792,18 @@
       <p class="muted" style="margin:-6px 0 10px">${invNo(sale.id)} · <span dir="auto">${esc(sale.customer_name)}</span> · <b style="color:var(--mint)">${money(sale.total)}</b></p>
       <div class="receipt-preview" data-prev><p class="muted" style="padding:40px;text-align:center">Making the receipt…</p></div>
       ${receiptButtons(sale)}
-      <button class="btn ghost block" data-close style="margin-top:10px">Done</button>`);
+      <div class="row" style="margin-top:10px">
+        <button class="btn danger" data-undo-sale>${icon.undo}Undo sale</button>
+        <button class="btn ghost" data-close>Done</button>
+      </div>`);
+    $('[data-undo-sale]', sh).onclick = (e) => busy(e.currentTarget, async () => {
+      try {
+        const r = await api(`/api/sales/${sale.id}/cancel`, { body: {} });
+        S.data = r.state; S.sales = []; closeSheet();
+        refreshView([...new Set(sale.items.map((i) => `${i.color_id}:${i.size_id}`))]);
+        toast('ok', 'Sale undone', `${invNo(sale.id)} is cancelled — the pieces are back in stock`);
+      } catch (err) { toast('err', 'Could not undo', err.message); }
+    });
     wireReceiptButtons(sh, sale);
   }
 
@@ -841,31 +917,43 @@
           ${sale.discount ? `<div class="line"><span>Subtotal</span><span class="num">${fmt(sale.subtotal)}</span></div><div class="line"><span>Discount</span><span class="num">−${fmt(sale.discount)}</span></div>` : ''}
           <div class="grand"><span>Total</span><b class="num" ${cancelled ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${fmt(sale.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
         </div>
-        ${cancelled ? `<p class="muted" style="font-size:13px">Cancelled ${dateFmt(sale.cancelled_at)} by ${esc(sale.cancelled_by)} — the pieces went back to stock.</p>` : `
+        ${cancelled ? `<p class="muted" style="font-size:13px">Cancelled ${dateFmt(sale.cancelled_at)} by ${esc(sale.cancelled_by)} — the pieces went back to stock.</p>
+        <button class="btn block" data-restore-sale>${icon.undo}Undo cancel — bring this sale back</button>` : `
         <div class="receipt-preview hidden" data-prev></div>
         ${receiptButtons(sale)}
         <div class="actions-grid">
           <button class="btn" data-toggle-paid>${sale.paid ? 'Mark as not paid' : 'Mark as paid ✓'}</button>
           <button class="btn danger" data-cancel>Cancel sale</button>
         </div>`}`;
-      if (cancelled) return;
+      if (cancelled) {
+        $('[data-restore-sale]', sh).onclick = (e) => busy(e.currentTarget, () => restoreSale().catch((err) => toast('err', 'Could not bring it back', err.message)));
+        return;
+      }
       wireReceiptButtons(sh, sale);
-      $('[data-toggle-paid]', sh).onclick = async () => {
+      $('[data-toggle-paid]', sh).onclick = (e) => busy(e.currentTarget, async () => {
+        const want = !sale.paid;
         try {
-          const r = await api(`/api/sales/${sale.id}/paid`, { body: { paid: !sale.paid } });
-          sale = r.sale; S.data = r.state; paint(); reloadSales();
-          toast('ok', sale.paid ? 'Marked as paid' : 'Marked as not paid');
-        } catch (e) { toast('err', e.message); }
-      };
-      $('[data-cancel]', sh).onclick = async () => {
+          await setPaid(want);
+          undoable(want ? 'Marked as paid' : 'Marked as not paid', invNo(sale.id), async () => { await setPaid(!want); toast('ok', 'Undone', `${invNo(sale.id)} is ${want ? 'not paid' : 'paid'} again`); });
+        } catch (err) { toast('err', err.message); }
+      });
+      $('[data-cancel]', sh).onclick = async (e) => {
+        const btn = e.currentTarget;
         const ok = await confirmSheet('Cancel this sale?', `${invNo(sale.id)} for ${sale.customer_name}. The pieces go back to stock.`, 'Yes, cancel it', true);
         if (!ok) return;
-        try {
-          const r = await api(`/api/sales/${sale.id}/cancel`, { body: {} });
-          sale = r.sale; S.data = r.state; paint(); renderShell();
-          toast('ok', 'Sale cancelled', 'Stock is back');
-        } catch (e) { toast('err', e.message); }
+        busy(btn, async () => {
+          try {
+            apply(await api(`/api/sales/${sale.id}/cancel`, { body: {} }));
+            undoable('Sale cancelled', `${invNo(sale.id)} · stock is back`, restoreSale);
+          } catch (err) { toast('err', err.message); }
+        });
       };
+    };
+    const apply = (r) => { sale = r.sale; S.data = r.state; if (sh.isConnected) paint(); renderShell(); };
+    const setPaid = async (paid) => apply(await api(`/api/sales/${sale.id}/paid`, { body: { paid } }));
+    const restoreSale = async () => {
+      apply(await api(`/api/sales/${sale.id}/restore`, { body: {} }));
+      toast('ok', 'Sale is back', `${invNo(sale.id)} · the pieces left stock again`);
     };
     paint();
   }
@@ -890,7 +978,8 @@
           ${[['all', 'All'], ['unpaid', 'Not paid'], ['cancelled', 'Cancelled']].map(([k, l]) => `<button class="chip ${S.salesStatus === k ? 'on' : ''}" data-st="${k}">${l}</button>`).join('')}
         </div>
       </div>
-      <div class="sales-list" id="sales-list"><p class="muted">Loading…</p></div>`;
+      <div class="sales-list" id="sales-list">${S.sales.length ? '' : '<div class="skel"></div>'.repeat(4)}</div>`;
+    if (S.sales.length) paintSalesList();
     let t;
     $('#sales-q').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { S.salesQ = e.target.value; reloadSales(); }, 250); };
     $$('[data-st]').forEach((b) => (b.onclick = () => { S.salesStatus = b.dataset.st; $$('[data-st]').forEach((x) => x.classList.toggle('on', x === b)); reloadSales(); }));
@@ -901,13 +990,13 @@
     const el = $('#sales-list');
     if (!el) return;
     if (!S.sales.length) {
-      el.innerHTML = `<div class="empty"><b>${S.salesQ || S.salesStatus !== 'all' ? 'No sales match' : 'No sales yet'}</b>Tap <span style="color:var(--mint)">New sale</span> below to log the first one.</div>`;
+      el.innerHTML = `<div class="empty"><div class="em-ic">${icon.receipt}</div><b>${S.salesQ || S.salesStatus !== 'all' ? 'No sales match' : 'No sales yet'}</b>Tap <span style="color:var(--mint)">New sale</span> below to log the first one.</div>`;
       return;
     }
     el.innerHTML = S.sales.map((s) => {
       const pcs = s.items.reduce((t, i) => t + i.qty, 0);
       const state = s.cancelled_at ? '<span class="pill cancelled">Cancelled</span>' : s.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>';
-      return `<button class="sale ${s.cancelled_at ? 'is-cancelled' : ''}" data-id="${s.id}">
+      return `<button class="sale ${s.cancelled_at ? 'is-cancelled' : s.paid ? '' : 'is-unpaid'}" data-id="${s.id}">
         <div class="main">
           <div class="top"><span class="inv">${invNo(s.id)}</span><span class="who" dir="auto">${esc(s.customer_name)}</span>${state}</div>
           <div class="items">${s.items.map((i) => `<span class="mini ${i.print_type !== 'none' ? 'print' : ''}"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)}${i.print_type === 'front' ? ' · F' : i.print_type === 'front_back' ? ' · F+B' : ''}</span>`).join('')}</div>
@@ -1125,6 +1214,7 @@
       S.me = me.username;
       S.defaultPasswords = me.default_passwords;
       S.data = await api('/api/state');
+      S.enter = true;
       renderShell();
       const a = alerts();
       if (a.low.length || a.out.length || a.high.length) {

@@ -279,8 +279,8 @@ app.post('/api/login', (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const password = String(req.body.password || '');
   const expected = USERS[username];
-  const ok = expected && expected.length === password.length &&
-    crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(password));
+  const want = Buffer.from(expected || ''), got = Buffer.from(password);
+  const ok = !!expected && want.length === got.length && crypto.timingSafeEqual(want, got);
   if (!ok) {
     const r = rec && now - rec.first < LOGIN_WINDOW ? rec : { first: now, count: 0 };
     r.count += 1; loginFails.set(ip, r);
@@ -409,6 +409,35 @@ app.post('/api/sales/:id/cancel', auth, (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// undo a cancel: the pieces leave stock again (only if they are still there)
+app.post('/api/sales/:id/restore', auth, (req, res, next) => {
+  try {
+    const id = int(req.params.id);
+    db.transaction(() => {
+      const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(id);
+      if (!sale) throw new HttpError(404, 'Sale not found');
+      if (!sale.cancelled_at) throw new HttpError(409, 'This sale is not cancelled');
+      const items = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(id);
+      const demand = {};
+      for (const it of items) demand[`${it.color_id}:${it.size_id}`] = (demand[`${it.color_id}:${it.size_id}`] || 0) + it.qty;
+      for (const it of items) {
+        const row = db.prepare('SELECT qty FROM stock WHERE color_id = ? AND size_id = ?').get(it.color_id, it.size_id);
+        if (!row || row.qty < demand[`${it.color_id}:${it.size_id}`]) {
+          throw new HttpError(409, `Not enough ${it.product_name} ${it.color_name} ${it.size_name} in stock to bring this sale back`);
+        }
+      }
+      const now = nowISO();
+      db.prepare('UPDATE sales SET cancelled_at = NULL, cancelled_by = NULL WHERE id = ?').run(id);
+      for (const it of items) {
+        db.prepare('UPDATE stock SET qty = qty - ? WHERE color_id = ? AND size_id = ?').run(it.qty, it.color_id, it.size_id);
+        db.prepare(`INSERT INTO movements (created_at,created_by,color_id,size_id,delta,reason,sale_id,note) VALUES (?,?,?,?,?,'sale',?,'Cancel undone')`)
+          .run(now, req.user, it.color_id, it.size_id, -it.qty, id);
+      }
+    })();
+    res.json({ sale: saleWithItems(id), state: buildState() });
+  } catch (e) { next(e); }
+});
+
 app.post('/api/sales/:id/paid', auth, (req, res) => {
   const id = int(req.params.id);
   const r = db.prepare('UPDATE sales SET paid = ? WHERE id = ?').run(req.body.paid ? 1 : 0, id);
@@ -447,7 +476,29 @@ app.post('/api/stock/set', auth, (req, res, next) => {
       if (cur.qty === qty) return;
       db.prepare('UPDATE stock SET qty = ? WHERE color_id = ? AND size_id = ?').run(qty, int(req.body.color_id), int(req.body.size_id));
       db.prepare(`INSERT INTO movements (created_at,created_by,color_id,size_id,delta,reason,note) VALUES (?,?,?,?,?,'adjust',?)`)
-        .run(nowISO(), req.user, int(req.body.color_id), int(req.body.size_id), qty - cur.qty, String(req.body.note || 'Manual count correction'));
+        .run(nowISO(), req.user, int(req.body.color_id), int(req.body.size_id), qty - cur.qty, String(req.body.note || 'Manual count correction').slice(0, 200));
+    })();
+    res.json({ state: buildState() });
+  } catch (e) { next(e); }
+});
+
+// undo a restock or a count fix: applies the opposite change, never below zero
+app.post('/api/stock/undo', auth, (req, res, next) => {
+  try {
+    const items = (Array.isArray(req.body.items) ? req.body.items : [])
+      .map((i) => ({ c: int(i.color_id), s: int(i.size_id), d: int(i.delta) })).filter((i) => i.d !== 0);
+    if (!items.length) throw new HttpError(400, 'Nothing to undo');
+    const note = String(req.body.note || 'Undo').slice(0, 200);
+    const now = nowISO();
+    db.transaction(() => {
+      for (const it of items) {
+        const cur = db.prepare('SELECT qty FROM stock WHERE color_id = ? AND size_id = ?').get(it.c, it.s);
+        if (!cur) throw new HttpError(400, 'Unknown color/size');
+        if (cur.qty + it.d < 0) throw new HttpError(409, 'Some of those pieces were sold already');
+        db.prepare('UPDATE stock SET qty = qty + ? WHERE color_id = ? AND size_id = ?').run(it.d, it.c, it.s);
+        db.prepare(`INSERT INTO movements (created_at,created_by,color_id,size_id,delta,reason,note) VALUES (?,?,?,?,?,'adjust',?)`)
+          .run(now, req.user, it.c, it.s, it.d, note);
+      }
     })();
     res.json({ state: buildState() });
   } catch (e) { next(e); }
@@ -586,7 +637,7 @@ app.get('/r/:token', (req, res) => {
 @font-face{font-family:Bebas;src:url(/fonts/bebas-neue-latin-400-normal.woff2) format('woff2')}
 @font-face{font-family:Inter;src:url(/fonts/inter-latin-600-normal.woff2) format('woff2');font-weight:600}
 @font-face{font-family:Cairo;src:url(/fonts/cairo-arabic-700-normal.woff2) format('woff2');font-weight:700}
-*{box-sizing:border-box}body{margin:0;background:#2E2D4C;color:#F2F5F1;font-family:Inter,Cairo,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}::selection{background:#C0DBC6;color:#2E2D4C}html{scrollbar-color:#C0DBC6 #262543;scrollbar-width:thin}html{background:#2E2D4C}body{margin:0;background:#2E2D4C;color:#F2F5F1;font-family:Inter,Cairo,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 .w{max-width:560px;margin:0 auto;padding:22px 16px calc(28px + env(safe-area-inset-bottom,0px))}
 .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.top img{height:46px}
 .inv{font-family:Bebas,sans-serif;font-size:26px;letter-spacing:1px;color:#ABAACB}
@@ -608,7 +659,9 @@ ${cancelled ? '<div class="x">This sale was cancelled · <span class="ar">تم �
 
 app.get('/healthz', (req, res) => { db.prepare('SELECT 1').get(); res.json({ ok: true }); });
 
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, file) => res.setHeader('Cache-Control', /\.(woff2|png)$/.test(file) ? 'public, max-age=604800' : 'no-cache'),
+}));
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.use((err, req, res, _next) => {
