@@ -1315,7 +1315,6 @@
   // page 1 of the PDF: a welcome cover for the client
   function coverHTML(sale) {
     const st = S.data.settings;
-    const c = esc(cur());
     const logo = st.logo ? `<img class="custom" src="${esc(st.logo)}" alt="">` : '<img src="/brand/logo-lockup.png" alt="Yalla Wear">';
     const pcs = sale.items.reduce((t, i) => t + i.qty, 0);
     const first = esc(String(sale.customer_name).trim().split(/\s+/)[0] || sale.customer_name);
@@ -1340,7 +1339,6 @@
       <div class="rcv-stats">
         <div class="rcv-box"><div class="k"><span>Order</span><span class="ar">الطلب</span></div><div class="v">${invNo(sale.id)}</div></div>
         <div class="rcv-box"><div class="k"><span>Pieces</span><span class="ar">القطع</span></div><div class="v">${pcs}</div></div>
-        <div class="rcv-box hl"><div class="k"><span>Total</span><span class="ar">المجموع</span></div><div class="v">${fmt(sale.total)}<small>${c}</small></div></div>
       </div>
       <div class="rcv-foot">
         <div><img class="tagline" src="/brand/tagline.png" alt="Style That Moves You!">${contacts ? `<div class="ct">${contacts}</div>` : ''}</div>

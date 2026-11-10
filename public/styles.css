@@ -312,7 +312,7 @@ table.stock { width: 100%; border-collapse: separate; border-spacing: 0; min-wid
 .rcv-ready .ck::after { content: ''; position: absolute; left: 12px; top: 7px; width: 8px; height: 15px; border: solid #C0DBC6; border-width: 0 3px 3px 0; transform: rotate(45deg); }
 .rcv-ready .sep { width: 2px; height: 24px; background: rgba(46,45,76,.3); margin-top: -2px; }
 .rcv-ready .ar { font-family: 'Cairo', sans-serif; font-weight: 800; font-size: 20px; letter-spacing: 0; margin-top: -2px; }
-.rcv-stats { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 12px; }
+.rcv-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .rcv-box { background: rgba(54,53,89,.9); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 14px 16px 12px; }
 .rcv-box .k { font-size: 11px; color: #ABAACB; text-transform: uppercase; letter-spacing: .8px; font-weight: 700; display: flex; justify-content: space-between; }
 .rcv-box .k .ar { font-family: 'Cairo', sans-serif; text-transform: none; letter-spacing: 0; }
