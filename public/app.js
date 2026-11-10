@@ -840,7 +840,7 @@
         toast('ok', 'Message copied 📋', 'Paste it in the Instagram chat and send', 6000);
       };
       const prev = $('[data-prev]', sh);
-      if (prev) prev.innerHTML = `<img src="${pdf.preview}" alt="Receipt ${invNo(sale.id)}">`;
+      if (prev) prev.innerHTML = `<img src="${pdf.cover}" alt="Welcome page ${invNo(sale.id)}"><img src="${pdf.preview}" alt="Receipt ${invNo(sale.id)}">`;
       const share = $('[data-share]', sh), dl = $('[data-dl]', sh);
       share.disabled = false; dl.disabled = false;
       dl.onclick = () => downloadBlob(pdf.blob, pdf.filename);
@@ -1086,6 +1086,43 @@
   }
 
   // ---------- RECEIPT → PDF ----------
+  // page 1 of the PDF: a welcome cover for the client
+  function coverHTML(sale) {
+    const st = S.data.settings;
+    const c = esc(cur());
+    const logo = st.logo ? `<img class="custom" src="${esc(st.logo)}" alt="">` : '<img src="/brand/logo-lockup.png" alt="Yalla Wear">';
+    const pcs = sale.items.reduce((t, i) => t + i.qty, 0);
+    const first = esc(String(sale.customer_name).trim().split(/\s+/)[0] || sale.customer_name);
+    const contacts = [st.shop_instagram, st.shop_phone].filter(Boolean).map(esc).join(' · ');
+    return `<div class="rcv">
+      <div class="rcv-glow"></div>
+      <img class="rcv-bg" src="/brand/mark.png" alt="">
+      <div class="rcv-frame"></div>
+      <div class="rcv-top">
+        <span class="rcv-pill">ORDER ${invNo(sale.id)}</span>
+        <span class="rcv-date">${dateOnly(sale.created_at)}</span>
+      </div>
+      <div class="rcv-mid">
+        <div class="rcv-logo">${logo}</div>
+        <div class="rcv-ar">أهلاً بك في عائلة يلا وير</div>
+        <div class="rcv-en">WELCOME TO THE<br><em>YALLA WEAR</em> FAMILY</div>
+        <div class="rcv-rule"></div>
+        <div class="rcv-hello">Hello <b dir="auto">${first}</b>,</div>
+        <div class="rcv-hello-ar">مرحبا <b dir="auto">${first}</b></div>
+        <div class="rcv-ready"><i class="ck"></i><span>YOUR ORDER IS READY</span><span class="sep"></span><span class="ar">طلبك جاهز</span></div>
+      </div>
+      <div class="rcv-stats">
+        <div class="rcv-box"><div class="k"><span>Order</span><span class="ar">الطلب</span></div><div class="v">${invNo(sale.id)}</div></div>
+        <div class="rcv-box"><div class="k"><span>Pieces</span><span class="ar">القطع</span></div><div class="v">${pcs}</div></div>
+        <div class="rcv-box hl"><div class="k"><span>Total</span><span class="ar">المجموع</span></div><div class="v">${fmt(sale.total)}<small>${c}</small></div></div>
+      </div>
+      <div class="rcv-foot">
+        <div><img class="tagline" src="/brand/tagline.png" alt="Style That Moves You!">${contacts ? `<div class="ct">${contacts}</div>` : ''}</div>
+        <div class="next"><div class="en">YOUR RECEIPT IS ON THE NEXT PAGE <span class="arw">›</span></div><div class="ar">إيصالك بالصفحة التالية</div></div>
+      </div>
+    </div>`;
+  }
+
   function receiptHTML(sale) {
     const st = S.data.settings;
     const c = esc(cur());
@@ -1136,30 +1173,39 @@
     const key = `${sale.id}:${sale.paid}:${sale.cancelled_at || ''}`;
     if (S.pdfCache.has(key)) return S.pdfCache.get(key);
     const stage = $('#receipt-stage');
-    stage.innerHTML = receiptHTML(sale);
+    stage.innerHTML = coverHTML(sale) + receiptHTML(sale);
     await Promise.all([
       document.fonts.load('800 28px Cairo', 'يلا وير'), document.fonts.load('400 13px Cairo', 'مدفوع'),
       document.fonts.load('700 13px Cairo', 'مدفوع'), document.fonts.load('400 40px Bebas', 'TOTAL'),
       document.fonts.load('700 15px Inter', 'A'), document.fonts.load('400 15px Inter', 'A'),
+      document.fonts.load('600 15px Inter', 'A'),
     ]).catch(() => {});
     await document.fonts.ready;
     await Promise.all($$('img', stage).map((im) => (im.complete ? 0 : new Promise((r) => { im.onload = im.onerror = r; }))));
-    const el = $('.rc', stage);
-    const canvas = await window.html2canvas(el, { scale: 2, backgroundColor: '#2E2D4C', useCORS: true, logging: false });
+    const shot = (el) => window.html2canvas(el, { scale: 2, backgroundColor: '#2E2D4C', useCORS: true, logging: false });
+    const coverCanvas = await shot($('.rcv', stage));
+    const canvas = await shot($('.rc', stage));
     const { jsPDF } = window.jspdf;
     const wPt = 420;
-    const hPt = (canvas.height / canvas.width) * wPt;
-    const doc = new jsPDF({ unit: 'pt', format: [wPt, hPt], orientation: hPt > wPt ? 'portrait' : 'landscape', compress: true });
+    const sizeOf = (cv) => [wPt, (cv.height / cv.width) * wPt];
+    const orient = ([w, h]) => (h > w ? 'portrait' : 'landscape');
+    const coverSize = sizeOf(coverCanvas), rcSize = sizeOf(canvas);
+    // page 1: welcome cover · page 2: the receipt
+    const doc = new jsPDF({ unit: 'pt', format: coverSize, orientation: orient(coverSize), compress: true });
+    const coverImg = coverCanvas.toDataURL('image/jpeg', 0.92);
+    doc.addImage(coverImg, 'JPEG', 0, 0, ...coverSize);
+    doc.addPage(rcSize, orient(rcSize));
     const img = canvas.toDataURL('image/jpeg', 0.92);
-    doc.addImage(img, 'JPEG', 0, 0, wPt, hPt);
+    doc.addImage(img, 'JPEG', 0, 0, ...rcSize);
     doc.setProperties({ title: `Yalla Wear ${invNo(sale.id)}`, author: 'Yalla Wear' });
     const safeName = sale.customer_name.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'client';
-    const out = { blob: doc.output('blob'), preview: img, filename: `YallaWear-${invNo(sale.id)}-${safeName}.pdf`, link: null };
+    const out = { blob: doc.output('blob'), cover: coverImg, preview: img, filename: `YallaWear-${invNo(sale.id)}-${safeName}.pdf`, link: null };
     stage.innerHTML = '';
-    const tw = 600, th = Math.min(Math.round(canvas.height * tw / canvas.width), 1200);
+    // the link preview in WhatsApp / Instagram shows the welcome cover
+    const tw = 600, th = Math.round(coverCanvas.height * tw / coverCanvas.width);
     const tc = document.createElement('canvas'); tc.width = tw; tc.height = th;
     const tctx = tc.getContext('2d'); tctx.fillStyle = '#2E2D4C'; tctx.fillRect(0, 0, tw, th);
-    tctx.drawImage(canvas, 0, 0, canvas.width, Math.round(th * canvas.width / tw), 0, 0, tw, th);
+    tctx.drawImage(coverCanvas, 0, 0, tw, th);
     try {
       const pdfData = doc.output('datauristring').replace(/^data:application\/pdf;[^,]*base64,/, 'data:application/pdf;base64,');
       const r = await api(`/api/sales/${sale.id}/receipt`, { body: { pdf: pdfData, image: img, thumb: tc.toDataURL('image/jpeg', 0.8) } });

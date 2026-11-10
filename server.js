@@ -621,6 +621,7 @@ app.get('/r/:token', (req, res) => {
   const v = fs.existsSync(jpg) ? Math.round(fs.statSync(jpg).mtimeMs / 1000) : 0;
   const total = `${Number(sale.total).toLocaleString('en-US')} ${st.currency}`;
   const cancelled = !!sale.cancelled_at;
+  const first = String(sale.customer_name).trim().split(/\s+/)[0] || sale.customer_name;
   const contact = [st.shop_instagram && `<a href="https://instagram.com/${escHtml(cleanInstagram(st.shop_instagram))}">Instagram ${escHtml(st.shop_instagram)}</a>`,
     st.shop_phone && `<a href="https://wa.me/${escHtml(String(st.shop_phone).replace(/\D/g, ''))}">WhatsApp ${escHtml(st.shop_phone)}</a>`].filter(Boolean).join(' · ');
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -636,8 +637,40 @@ app.get('/r/:token', (req, res) => {
 <style>
 @font-face{font-family:Bebas;src:url(/fonts/bebas-neue-latin-400-normal.woff2) format('woff2')}
 @font-face{font-family:Inter;src:url(/fonts/inter-latin-600-normal.woff2) format('woff2');font-weight:600}
+@font-face{font-family:Inter;src:url(/fonts/inter-latin-400-normal.woff2) format('woff2');font-weight:400}
+@font-face{font-family:Inter;src:url(/fonts/inter-latin-700-normal.woff2) format('woff2');font-weight:700}
 @font-face{font-family:Cairo;src:url(/fonts/cairo-arabic-700-normal.woff2) format('woff2');font-weight:700}
-*{box-sizing:border-box}::selection{background:#C0DBC6;color:#2E2D4C}html{scrollbar-color:#C0DBC6 #262543;scrollbar-width:thin}html{background:#2E2D4C}body{margin:0;background:#2E2D4C;color:#F2F5F1;font-family:Inter,Cairo,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+@font-face{font-family:Cairo;src:url(/fonts/cairo-arabic-800-normal.woff2) format('woff2');font-weight:800}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+.hero{position:relative;min-height:100vh;min-height:100svh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px 22px calc(40px + env(safe-area-inset-bottom,0px));overflow:hidden}
+.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 88% 6%,rgba(192,219,198,.22),transparent 45%),radial-gradient(circle at 6% 94%,rgba(192,219,198,.12),transparent 40%);pointer-events:none}
+.hero::after{content:'';position:absolute;inset:14px;border:2px dashed rgba(192,219,198,.28);border-radius:26px;pointer-events:none}
+.hero .bg{position:absolute;width:min(560px,120vw);right:-28%;bottom:4%;opacity:.06;transform:rotate(-14deg);pointer-events:none}
+.hero>*{position:relative}
+.hero .logo{height:clamp(72px,18vw,104px)}
+.hero .wa{font-family:Cairo,sans-serif;font-weight:800;font-size:clamp(22px,6.4vw,30px);color:#C0DBC6;direction:rtl;margin:34px 0 0;line-height:1.35}
+.hero h1{font-family:Bebas,sans-serif;font-weight:400;font-size:clamp(52px,15vw,84px);line-height:.9;letter-spacing:1.5px;margin:8px 0 0}
+.hero h1 em{font-style:normal;color:#C0DBC6}
+.hero .rule{width:72px;height:4px;border-radius:4px;background:#C0DBC6;margin:28px auto 24px}
+.hero .hi{font-size:clamp(19px,5vw,23px);color:#D3D6E4;margin:0}.hero .hi b{color:#F2F5F1}
+.hero .hi-ar{font-family:Cairo,sans-serif;font-weight:700;font-size:18px;color:#ABAACB;direction:rtl;margin:2px 0 0}
+.ready{display:inline-flex;align-items:center;gap:14px;margin-top:26px;background:#C0DBC6;color:#2E2D4C;border-radius:999px;padding:9px clamp(18px,6vw,30px) 9px 10px;font-family:Bebas,sans-serif;font-size:clamp(23px,7.4vw,27px);letter-spacing:1.5px;line-height:1;white-space:nowrap}
+.ready .ck{width:38px;height:38px;border-radius:50%;background:#2E2D4C;display:grid;place-items:center;flex:none}
+.ready .ck svg{width:19px;height:19px}
+.ready .t{display:flex;flex-direction:column;align-items:flex-start;gap:1px}
+.ready .ar{font-family:Cairo,sans-serif;font-weight:800;font-size:15px;letter-spacing:0;line-height:1.2}
+.ready.off{background:rgba(255,92,108,.16);color:#FF7A87;border:1px solid rgba(255,92,108,.45);padding:10px 20px;white-space:normal;font-size:22px}
+.cta{display:inline-flex;flex-direction:column;align-items:center;gap:6px;margin-top:40px;color:#ABAACB;text-decoration:none;font-size:14px;font-weight:600}
+.cta .ar{font-weight:700}
+.cta i{width:44px;height:44px;border-radius:50%;border:1.5px solid rgba(192,219,198,.5);display:grid;place-items:center;margin-top:6px;animation:bob 1.8s ease-in-out infinite}
+.cta i svg{width:20px;height:20px}
+@keyframes bob{50%{transform:translateY(6px)}}
+@keyframes up{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+.in{opacity:0;animation:up .8s cubic-bezier(.2,.7,.2,1) forwards}
+.d1{animation-delay:.1s}.d2{animation-delay:.3s}.d3{animation-delay:.45s}.d4{animation-delay:.65s}.d5{animation-delay:.85s}.d6{animation-delay:1.05s}.d7{animation-delay:1.3s}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.in{opacity:1;animation:none}.cta i{animation:none}}
+.sec-h{font-family:Bebas,sans-serif;font-size:24px;letter-spacing:1.5px;color:#ABAACB;display:flex;justify-content:space-between;align-items:baseline;margin:0 0 12px}
+.sec-h .ar{font-size:15px;letter-spacing:0}::selection{background:#C0DBC6;color:#2E2D4C}html{scrollbar-color:#C0DBC6 #262543;scrollbar-width:thin}html{background:#2E2D4C}body{margin:0;background:#2E2D4C;color:#F2F5F1;font-family:Inter,Cairo,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 .w{max-width:560px;margin:0 auto;padding:22px 16px calc(28px + env(safe-area-inset-bottom,0px))}
 .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.top img{height:46px}
 .inv{font-family:Bebas,sans-serif;font-size:26px;letter-spacing:1px;color:#ABAACB}
@@ -648,8 +681,22 @@ app.get('/r/:token', (req, res) => {
 .x{background:rgba(255,92,108,.15);color:#FF7A87;border:1px solid rgba(255,92,108,.4);padding:12px;border-radius:12px;text-align:center;font-weight:600;margin-bottom:14px}
 .f{text-align:center;color:#ABAACB;font-size:13px;margin-top:22px;line-height:1.7}.f a{color:#C0DBC6;text-decoration:none}
 .f img{height:15px;opacity:.9;display:block;margin:0 auto 8px}
-</style></head><body><div class="w">
-<div class="top"><img src="/brand/logo-lockup.png" alt="Yalla Wear"><div class="inv">${sale.invoice_no}</div></div>
+</style></head><body>
+<section class="hero">
+<img class="bg" src="/brand/mark.png" alt="">
+<img class="logo in d1" src="/brand/logo-lockup.png" alt="Yalla Wear">
+<p class="wa in d2">أهلاً بك في عائلة يلا وير</p>
+<h1 class="in d3">Welcome to the<br><em>Yalla Wear</em> family</h1>
+<div class="rule in d4"></div>
+<p class="hi in d5">Hello <b dir="auto">${escHtml(first)}</b>,</p>
+<p class="hi-ar in d5">مرحبا <b dir="auto">${escHtml(first)}</b></p>
+${cancelled
+    ? '<div class="ready off in d6">This order was cancelled · <span class="ar">تم إلغاء الطلب</span></div>'
+    : '<div class="ready in d6"><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="#C0DBC6" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span class="t"><span>Your order is ready</span><span class="ar">طلبك جاهز</span></span></div>'}
+<a class="cta in d7" href="#receipt">View your receipt<span class="ar">شوف الإيصال</span><i><svg viewBox="0 0 24 24" fill="none" stroke="#C0DBC6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg></i></a>
+</section>
+<div class="w" id="receipt">
+<div class="sec-h"><span>Receipt ${sale.invoice_no}</span><span class="ar">إيصال البيع</span></div>
 ${cancelled ? '<div class="x">This sale was cancelled · <span class="ar">تم إلغاء هذه الفاتورة</span></div>' : ''}
 <div class="card"><img src="/r/${req.params.token}/receipt.jpg?v=${v}" alt="Receipt ${sale.invoice_no}"></div>
 <a class="btn" href="/r/${req.params.token}/receipt.pdf?v=${v}" download="YallaWear-${sale.invoice_no}.pdf">Download PDF · <span class="ar">تحميل الإيصال</span></a>
