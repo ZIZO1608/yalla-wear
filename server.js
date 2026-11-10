@@ -95,6 +95,39 @@ const DEFAULT_SETTINGS = {
 const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
 for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insertSetting.run(k, v);
 
+// ---------- client book ----------
+// Every client is saved once (name + WhatsApp number / Instagram + note). Sales point to their client.
+// Sales still keep their own copy of the name and contact, so editing a client never changes old receipts.
+db.exec(`
+CREATE TABLE IF NOT EXISTS clients (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', instagram TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL,
+  archived INTEGER NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_name ON clients(lower(name));
+`);
+if (!db.prepare('PRAGMA table_info(sales)').all().some((c) => c.name === 'client_id')) {
+  db.exec('ALTER TABLE sales ADD COLUMN client_id INTEGER REFERENCES clients(id)');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_sales_client ON sales(client_id)');
+// one-time: build the client book from the clients of past sales (latest contact wins)
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'clients_seeded'").get()) {
+  db.transaction(() => {
+    const rows = db.prepare(`SELECT trim(customer_name) name, customer_phone phone, customer_instagram instagram, created_at, created_by
+      FROM sales ORDER BY id DESC`).all();
+    const add = db.prepare(`INSERT OR IGNORE INTO clients (name, phone, instagram, created_at, created_by, updated_at) VALUES (?,?,?,?,?,?)`);
+    const fillPhone = db.prepare("UPDATE clients SET phone = ? WHERE lower(name) = lower(?) AND phone = ''");
+    const fillIg = db.prepare("UPDATE clients SET instagram = ? WHERE lower(name) = lower(?) AND instagram = ''");
+    for (const r of rows) {
+      if (!r.name) continue;
+      add.run(r.name, r.phone || '', r.instagram || '', r.created_at, r.created_by, r.created_at);
+      if (r.phone) fillPhone.run(r.phone, r.name);
+      if (r.instagram) fillIg.run(r.instagram, r.name);
+    }
+    db.exec('UPDATE sales SET client_id = (SELECT c.id FROM clients c WHERE lower(c.name) = lower(trim(sales.customer_name))) WHERE client_id IS NULL');
+    insertSetting.run('clients_seeded', '1');
+  })();
+}
+
 // ---------- helpers ----------
 const getSettings = () => Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value]));
 const int = (v, def = 0) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : def; };
@@ -350,9 +383,11 @@ app.post('/api/sales', auth, (req, res, next) => {
       const subtotal = items.reduce((a, it) => a + (it.unit + it.printPrice) * it.qty, 0);
       const discount = Math.max(0, Math.min(int(b.discount), subtotal));
       const now = nowISO();
-      const saleId = db.prepare(`INSERT INTO sales (created_at, created_by, customer_name, customer_phone, customer_instagram, subtotal, discount, total, paid, note)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`).run(now, req.user, customer, String(b.customer_phone || '').trim().slice(0, 30), cleanInstagram(b.customer_instagram),
-        subtotal, discount, subtotal - discount, b.paid === false ? 0 : 1, String(b.note || '').trim().slice(0, 300)).lastInsertRowid;
+      const phone = String(b.customer_phone || '').trim().slice(0, 30), instagram = cleanInstagram(b.customer_instagram);
+      const clientId = saveClientFromSale(b.client_id, customer, phone, instagram, req.user, now);
+      const saleId = db.prepare(`INSERT INTO sales (created_at, created_by, customer_name, customer_phone, customer_instagram, subtotal, discount, total, paid, note, client_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(now, req.user, customer, phone, instagram,
+        subtotal, discount, subtotal - discount, b.paid === false ? 0 : 1, String(b.note || '').trim().slice(0, 300), clientId).lastInsertRowid;
       for (const it of items) {
         db.prepare(`INSERT INTO sale_items (sale_id,product_id,color_id,size_id,product_name,product_name_ar,color_name,color_name_ar,color_hex,size_name,
             qty,unit_price,print_type,print_price,line_total) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
@@ -536,9 +571,100 @@ app.post('/api/sales/:id/receipt', auth, (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-app.get('/api/customers', auth, (req, res) => {
-  res.json({ customers: db.prepare(`SELECT customer_name name, customer_phone phone, customer_instagram instagram, MAX(id) last_id, COUNT(*) sales
-    FROM sales GROUP BY lower(trim(customer_name)) ORDER BY last_id DESC LIMIT 500`).all() });
+// ---- client book ----
+const CLIENT_STATS = `SELECT c.id, c.name, c.phone, c.instagram, c.note, c.created_at, c.created_by, c.updated_at,
+    COUNT(s.id) orders, COALESCE(SUM(s.total), 0) spent,
+    COALESCE(SUM(CASE WHEN s.paid = 0 THEN 1 ELSE 0 END), 0) unpaid_count,
+    COALESCE(SUM(CASE WHEN s.paid = 0 THEN s.total ELSE 0 END), 0) unpaid_amount,
+    MAX(s.created_at) last_order_at
+  FROM clients c LEFT JOIN sales s ON s.client_id = c.id AND s.cancelled_at IS NULL`;
+const clientById = (id) => db.prepare(`${CLIENT_STATS} WHERE c.id = ? GROUP BY c.id`).get(id);
+
+function clientFields(b) {
+  const name = String(b.name || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+  if (!name) throw new HttpError(400, 'Client name is required');
+  return { name, phone: String(b.phone || '').trim().slice(0, 30), instagram: cleanInstagram(b.instagram), note: String(b.note || '').trim().slice(0, 300) };
+}
+const findClientByName = (name) => db.prepare('SELECT * FROM clients WHERE lower(name) = lower(?)').get(name);
+
+// Every sale saves its client: picks the chosen one, or finds them by name, or adds them to the book.
+// A new number or Instagram typed in the sale updates the saved client.
+function saveClientFromSale(clientId, name, phone, instagram, user, now) {
+  let c = clientId ? db.prepare('SELECT * FROM clients WHERE id = ?').get(int(clientId)) : null;
+  if (!c) c = findClientByName(name.replace(/\s+/g, ' '));
+  if (!c) {
+    return db.prepare(`INSERT INTO clients (name, phone, instagram, created_at, created_by, updated_at) VALUES (?,?,?,?,?,?)`)
+      .run(name.replace(/\s+/g, ' '), phone, instagram, now, user, now).lastInsertRowid;
+  }
+  db.prepare('UPDATE clients SET phone = ?, instagram = ?, archived = 0, updated_at = ? WHERE id = ?')
+    .run(phone || c.phone, instagram || c.instagram, now, c.id);
+  return c.id;
+}
+
+app.get('/api/clients', auth, (req, res) => {
+  res.json({ clients: db.prepare(`${CLIENT_STATS} WHERE c.archived = 0 GROUP BY c.id
+    ORDER BY COALESCE(MAX(s.created_at), c.updated_at) DESC LIMIT 2000`).all() });
+});
+
+app.get('/api/clients/:id', auth, (req, res) => {
+  const client = clientById(int(req.params.id));
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const ids = db.prepare('SELECT id FROM sales WHERE client_id = ? ORDER BY id DESC LIMIT 200').all(client.id);
+  res.json({ client, sales: ids.map((r) => saleWithItems(r.id)) });
+});
+
+app.post('/api/clients', auth, (req, res, next) => {
+  try {
+    const f = clientFields(req.body || {});
+    const now = nowISO();
+    const old = findClientByName(f.name);
+    if (old && !old.archived) throw new HttpError(409, `${old.name} is already in your clients`);
+    let id;
+    if (old) { // was removed before: bring them back with the new details
+      db.prepare('UPDATE clients SET name = ?, phone = ?, instagram = ?, note = ?, archived = 0, updated_at = ? WHERE id = ?')
+        .run(f.name, f.phone, f.instagram, f.note, now, old.id);
+      id = old.id;
+    } else {
+      id = db.prepare(`INSERT INTO clients (name, phone, instagram, note, created_at, created_by, updated_at) VALUES (?,?,?,?,?,?,?)`)
+        .run(f.name, f.phone, f.instagram, f.note, now, req.user, now).lastInsertRowid;
+    }
+    res.json({ client: clientById(id) });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/clients/:id', auth, (req, res, next) => {
+  try {
+    const id = int(req.params.id);
+    if (!db.prepare('SELECT 1 FROM clients WHERE id = ?').get(id)) throw new HttpError(404, 'Client not found');
+    const f = clientFields(req.body || {});
+    const clash = findClientByName(f.name);
+    if (clash && clash.id !== id) throw new HttpError(409, `${clash.name} is already in your clients`);
+    db.prepare('UPDATE clients SET name = ?, phone = ?, instagram = ?, note = ?, updated_at = ? WHERE id = ?')
+      .run(f.name, f.phone, f.instagram, f.note, nowISO(), id);
+    res.json({ client: clientById(id) });
+  } catch (e) { next(e); }
+});
+
+// removing only hides the client from the book; their sales and receipts stay
+app.post('/api/clients/:id/archive', auth, (req, res, next) => {
+  try {
+    const id = int(req.params.id);
+    const archived = req.body && req.body.archived === false ? 0 : 1;
+    const r = db.prepare('UPDATE clients SET archived = ?, updated_at = ? WHERE id = ?').run(archived, nowISO(), id);
+    if (!r.changes) throw new HttpError(404, 'Client not found');
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/export/clients.csv', auth, (req, res) => {
+  const rows = db.prepare(`${CLIENT_STATS} WHERE c.archived = 0 GROUP BY c.id ORDER BY c.name`).all();
+  const esc = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const head = ['name', 'phone', 'instagram', 'orders', 'spent', 'not_paid', 'last_order', 'note', 'added'];
+  const body = rows.map((r) => [r.name, r.phone, r.instagram ? '@' + r.instagram : '', r.orders, r.spent, r.unpaid_amount,
+    r.last_order_at || '', r.note, r.created_at].map(esc).join(','));
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="yalla-clients.csv"');
+  res.send('﻿' + [head.join(','), ...body].join('\n'));
 });
 
 // ---- settings ----

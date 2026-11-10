@@ -39,6 +39,23 @@
     return { type: 'unknown', phone: '', instagram: '' };
   }
   const contactOf = (sale) => (sale.customer_instagram ? '@' + sale.customer_instagram : sale.customer_phone || '');
+  // saved clients: WhatsApp number first (the receipt goes there), else Instagram
+  const clientContact = (c) => c.phone || (c.instagram ? '@' + c.instagram : '');
+  const initials = (name) => {
+    const w = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!w.length) return '?';
+    if (/[؀-ۿ]/.test(w[0])) return [...w[0]][0];
+    return w.slice(0, 2).map((x) => [...x][0]).join('').toUpperCase();
+  };
+  const avatar = (name, size = '') => `<span class="avatar ${size}" dir="auto">${esc(initials(name))}</span>`;
+  const isPhone = (v) => /^[+\d][\d\s\-()]{5,}$/.test(String(v || '').trim());
+  function waDigits(phone) {
+    let d = String(phone || '').replace(/\D/g, '');
+    if (d.startsWith('00')) d = d.slice(2);
+    else if (d.startsWith('0')) d = '963' + d.slice(1);
+    else if (d.length === 9 && d.startsWith('9')) d = '963' + d;
+    return d;
+  }
   const isLight = (hex) => {
     const h = String(hex || '#888888').replace('#', '');
     const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -66,11 +83,13 @@
     csv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
     undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
+    users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
   };
 
   // ---------- state ----------
-  const S = { me: null, data: null, view: 'stock', pid: null, sales: [], salesQ: '', salesStatus: 'all', pdfCache: new Map() };
+  const S = { me: null, data: null, view: 'stock', pid: null, sales: [], salesQ: '', salesStatus: 'all', pdfCache: new Map(), clients: null, clientsQ: '', clientsFilter: 'all' };
 
   async function api(path, opts = {}) {
     let res;
@@ -272,6 +291,7 @@
         <button class="tab ${S.view === 'stock' ? 'active' : ''}" data-view="stock">${icon.grid}<span class="lbl">Stock</span>${alertCount ? `<span class="badge">${alertCount}</span>` : ''}</button>
         <button class="tab tab-sell" id="btn-sell">${icon.plus}<span class="lbl">New sale</span></button>
         <button class="tab ${S.view === 'sales' ? 'active' : ''}" data-view="sales">${icon.receipt}<span class="lbl">Sales</span></button>
+        <button class="tab ${S.view === 'clients' ? 'active' : ''}" data-view="clients">${icon.users}<span class="lbl">Clients</span></button>
       </nav>`;
     $$('[data-view]').forEach((b) => (b.onclick = () => {
       if (S.view !== b.dataset.view) { S.enter = true; window.scrollTo(0, 0); }
@@ -280,7 +300,7 @@
     $('#btn-sell').onclick = () => openNewSale();
     $('#btn-settings').onclick = openSettings;
     $('#btn-logout').onclick = async () => { await api('/api/logout', { body: {} }).catch(() => {}); S.me = null; renderLogin(); };
-    if (S.view === 'stock') renderStock(); else renderSales();
+    if (S.view === 'stock') renderStock(); else if (S.view === 'clients') renderClients(); else renderSales();
     if (S.enter) { S.enter = false; $('#view').classList.add('enter'); countUp($('#view')); }
   }
 
@@ -616,8 +636,8 @@
 
     const sh = openSheet(`${sheetHead('New sale')}
       <div class="row stack-sm">
-        <div class="field"><label>Client name</label><input class="input" data-name placeholder="Who is buying?" autocomplete="off" list="clients-dl" dir="auto" />
-          <datalist id="clients-dl"></datalist><div class="hint" data-name-hint></div></div>
+        <div class="field"><label>Client name</label><input class="input" data-name placeholder="Who is buying? Type a name or number" autocomplete="off" dir="auto" />
+          <div class="hint" data-name-hint></div></div>
         <div class="field"><label>Phone or Instagram</label>
           <div class="contact-input"><span class="ci-icon" data-ci>${icon.phone}</span>
           <input class="input" data-contact placeholder="0944 123 456  or  @username" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" /></div>
@@ -731,16 +751,28 @@
       hint.className = 'hint ' + (c.type === 'unknown' ? 'bad' : c.type ? 'ok' : '');
     };
     ci.oninput = paintContact;
-    let known = [];
-    api('/api/customers').then((r) => {
-      known = r.customers;
-      $('#clients-dl', sh).innerHTML = known.map((k) => `<option value="${esc(k.name)}">${esc(k.instagram ? '@' + k.instagram : k.phone)}</option>`).join('');
-    }).catch(() => {});
-    $('[data-name]', sh).oninput = (e) => {
-      const k = known.find((x) => x.name.trim().toLowerCase() === e.target.value.trim().toLowerCase());
-      $('[data-name-hint]', sh).textContent = k ? `Returning client · ${k.sales} sale${k.sales === 1 ? '' : 's'} before` : '';
-      if (k && !ci.value.trim()) { ci.value = k.instagram ? '@' + k.instagram : k.phone; paintContact(); }
+    // client: picked from the saved clients, or a new one (saved automatically with the sale)
+    const nameIn = $('[data-name]', sh);
+    const showClient = (c) => {
+      const hint = $('[data-name-hint]', sh);
+      hint.className = 'hint' + (c ? ' ok' : '');
+      hint.textContent = c ? (c.orders ? `Saved client · ${c.orders} order${c.orders === 1 ? '' : 's'} · ${money(c.spent)} spent` : 'Saved client') : '';
     };
+    const useClient = (c, overwrite) => {
+      D.client = c;
+      nameIn.value = c.name;
+      if (overwrite || !ci.value.trim()) { ci.value = clientContact(c); paintContact(); }
+      showClient(c);
+    };
+    const picker = attachClientPicker(nameIn, (c) => { useClient(c, true); ci.focus(); });
+    if (!S.clients) loadClients().then(() => picker.refresh()).catch(() => {});
+    nameIn.addEventListener('input', () => {
+      const v = nameIn.value.trim().toLowerCase();
+      if (D.client && D.client.name.toLowerCase() !== v) D.client = null;
+      const exact = !D.client && S.clients && S.clients.find((x) => x.name.toLowerCase() === v);
+      if (exact) useClient(exact, false); else showClient(D.client);
+    });
+    if (preset.client) useClient(preset.client, true);
     $('[data-discount]', sh).oninput = renderTotals;
     $('[data-paid]', sh).onchange = (e) => { $('[data-paid-lbl]', sh).textContent = e.target.checked ? 'Paid' : 'Not paid yet'; };
     $('[data-save]', sh).onclick = async (e) => {
@@ -752,12 +784,14 @@
       e.target.disabled = true; e.target.textContent = 'Saving…';
       try {
         const r = await api('/api/sales', { body: {
+          client_id: D.client ? D.client.id : null,
           customer_name: name, customer_phone: contact.phone, customer_instagram: contact.instagram, items: D.items,
           discount: Number($('[data-discount]', sh).value) || 0, paid: $('[data-paid]', sh).checked, note: $('[data-note]', sh).value,
         } });
         S.data = r.state;
         S.sales = [];
         closeSheet();
+        refreshClients();
         const keys = [...new Set(D.items.map((i) => `${i.color_id}:${i.size_id}`))];
         refreshView(keys);
         announceStock(keys);
@@ -873,11 +907,7 @@
     ].join('\n');
   }
   function waLink(sale, link) {
-    let d = String(sale.customer_phone || '').replace(/\D/g, '');
-    if (d.startsWith('00')) d = d.slice(2);
-    else if (d.startsWith('0')) d = '963' + d.slice(1);
-    else if (d.length === 9 && d.startsWith('9')) d = '963' + d;
-    return `https://wa.me/${d}?text=${encodeURIComponent(receiptMessage(sale, link))}`;
+    return `https://wa.me/${waDigits(sale.customer_phone)}?text=${encodeURIComponent(receiptMessage(sale, link))}`;
   }
   function copyText(text) {
     const legacy = () => {
@@ -907,7 +937,7 @@
           ${cancelled ? '<span class="pill cancelled">Cancelled</span>' : sale.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>'}
           <span class="muted" style="font-size:13px">${dateFmt(sale.created_at)} · by ${esc(sale.created_by)}</span>
         </div>
-        <div class="kv"><span>Client</span><b dir="auto">${esc(sale.customer_name)}</b></div>
+        <div class="kv"><span>Client</span>${sale.client_id ? `<button class="link-btn" data-open-client dir="auto">${esc(sale.customer_name)}${icon.chevron}</button>` : `<b dir="auto">${esc(sale.customer_name)}</b>`}</div>
         ${sale.customer_phone ? `<div class="kv"><span>WhatsApp</span><span>${esc(sale.customer_phone)}</span></div>` : ''}
         ${sale.customer_instagram ? `<div class="kv"><span>Instagram</span><span>@${esc(sale.customer_instagram)}</span></div>` : ''}
         ${sale.note ? `<div class="kv"><span>Note</span><span>${esc(sale.note)}</span></div>` : ''}
@@ -925,6 +955,8 @@
           <button class="btn" data-toggle-paid>${sale.paid ? 'Mark as not paid' : 'Mark as paid ✓'}</button>
           <button class="btn danger" data-cancel>Cancel sale</button>
         </div>`}`;
+      const oc = $('[data-open-client]', sh);
+      if (oc) oc.onclick = () => openClient(sale.client_id);
       if (cancelled) {
         $('[data-restore-sale]', sh).onclick = (e) => busy(e.currentTarget, () => restoreSale().catch((err) => toast('err', 'Could not bring it back', err.message)));
         return;
@@ -993,7 +1025,12 @@
       el.innerHTML = `<div class="empty"><div class="em-ic">${icon.receipt}</div><b>${S.salesQ || S.salesStatus !== 'all' ? 'No sales match' : 'No sales yet'}</b>Tap <span style="color:var(--mint)">New sale</span> below to log the first one.</div>`;
       return;
     }
-    el.innerHTML = S.sales.map((s) => {
+    el.innerHTML = S.sales.map(saleRow).join('');
+    $$('.sale', el).forEach((b) => (b.onclick = () => openSaleDetail(+b.dataset.id).catch((e) => toast('err', e.message))));
+  }
+
+  function saleRow(s) {
+    {
       const pcs = s.items.reduce((t, i) => t + i.qty, 0);
       const state = s.cancelled_at ? '<span class="pill cancelled">Cancelled</span>' : s.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>';
       return `<button class="sale ${s.cancelled_at ? 'is-cancelled' : s.paid ? '' : 'is-unpaid'}" data-id="${s.id}">
@@ -1004,8 +1041,197 @@
         </div>
         <div class="amt"><b class="num">${fmt(s.total)}</b><span class="muted" style="font-size:12px">${pcs} pc${pcs === 1 ? '' : 's'} · ${esc(cur())}</span></div>
       </button>`;
-    }).join('');
-    $$('.sale', el).forEach((b) => (b.onclick = () => openSaleDetail(+b.dataset.id).catch((e) => toast('err', e.message))));
+    }
+  }
+
+  // ---------- CLIENTS ----------
+  async function loadClients() {
+    const r = await api('/api/clients');
+    S.clients = r.clients;
+    return r.clients;
+  }
+  const contactLine = (c) => {
+    const parts = [];
+    if (c.phone) parts.push(`<span class="ct-wa">${icon.wa}${esc(c.phone)}</span>`);
+    if (c.instagram) parts.push(`<span class="ct-ig">${icon.ig}@${esc(c.instagram)}</span>`);
+    return parts.join('') || '<span class="muted">No number saved</span>';
+  };
+
+  function renderClients() {
+    $('#view').innerHTML = `
+      <div class="section-head" style="margin-top:4px">
+        <div class="section-title">Clients <span class="count-tag" id="cl-count">${S.clients ? S.clients.length : ''}</span></div>
+        <div class="section-actions">
+          <a class="btn sm" href="/api/export/clients.csv" download>${icon.csv}Export</a>
+          <button class="btn sm primary" id="cl-add">${icon.plus}Add client</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <input class="input" id="cl-q" placeholder="Search name, number, @instagram…" value="${esc(S.clientsQ)}" autocomplete="off" />
+        <div class="filter-seg chips">
+          ${[['all', 'All'], ['unpaid', 'Owes money'], ['top', 'Top buyers']].map(([k, l]) => `<button class="chip ${S.clientsFilter === k ? 'on' : ''}" data-cf="${k}">${l}</button>`).join('')}
+        </div>
+      </div>
+      <div class="client-list" id="client-list">${S.clients ? '' : '<div class="skel"></div>'.repeat(4)}</div>`;
+    if (S.clients) paintClients();
+    $('#cl-q').oninput = (e) => { S.clientsQ = e.target.value; paintClients(); };
+    $$('[data-cf]').forEach((b) => (b.onclick = () => { S.clientsFilter = b.dataset.cf; $$('[data-cf]').forEach((x) => x.classList.toggle('on', x === b)); paintClients(); }));
+    $('#cl-add').onclick = () => openClientEditor(null, (c) => openClient(c.id));
+    loadClients().then(() => { if (S.view === 'clients') paintClients(); }).catch((e) => toast('err', e.message));
+  }
+
+  function matchClients(list, q, withNote = true) {
+    q = String(q || '').trim().toLowerCase();
+    if (!q) return list;
+    const ig = q.replace(/^@/, ''), digits = q.replace(/\D/g, '');
+    return list.filter((c) => c.name.toLowerCase().includes(q) || (c.instagram && c.instagram.toLowerCase().includes(ig))
+      || (digits.length >= 3 && c.phone.replace(/\D/g, '').includes(digits)) || (withNote && c.note && c.note.toLowerCase().includes(q)));
+  }
+
+  function paintClients() {
+    const el = $('#client-list');
+    if (!el || !S.clients) return;
+    const count = $('#cl-count'); if (count) count.textContent = S.clients.length;
+    let list = matchClients(S.clients, S.clientsQ);
+    if (S.clientsFilter === 'unpaid') list = list.filter((c) => c.unpaid_count > 0);
+    if (S.clientsFilter === 'top') list = [...list].filter((c) => c.spent > 0).sort((a, b) => b.spent - a.spent);
+    if (!list.length) {
+      el.innerHTML = `<div class="empty"><div class="em-ic">${icon.users}</div><b>${S.clients.length ? 'No clients match' : 'No clients yet'}</b>${S.clients.length ? 'Try another name or number.' : 'Every sale saves its client here. You can also tap <span style="color:var(--mint)">Add client</span>.'}</div>`;
+      return;
+    }
+    el.innerHTML = list.map((c, i) => `<button class="client" data-cid="${c.id}">
+      ${S.clientsFilter === 'top' && i < 3 ? `<span class="rank r${i + 1}">${i + 1}</span>` : ''}${avatar(c.name)}
+      <div class="main"><div class="nm" dir="auto">${esc(c.name)}</div><div class="ct">${contactLine(c)}</div></div>
+      <div class="amt">${c.orders ? `<b class="num">${fmt(c.spent)}</b><span class="muted">${c.orders} order${c.orders === 1 ? '' : 's'} · ${esc(cur())}</span>` : '<span class="pill new">No orders yet</span>'}
+        ${c.unpaid_count ? `<span class="pill unpaid">Owes ${fmt(c.unpaid_amount)}</span>` : ''}</div>
+    </button>`).join('');
+    $$('[data-cid]', el).forEach((b) => (b.onclick = () => openClient(+b.dataset.cid)));
+  }
+
+  async function openClient(id) {
+    const sh = openSheet(`${sheetHead('Client')}<div data-body>${'<div class="skel sm"></div>'.repeat(4)}</div>`);
+    let data;
+    try { data = await api(`/api/clients/${id}`); } catch (e) { $('[data-body]', sh).innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+    const paint = () => {
+      const { client: c, sales } = data;
+      $('[data-body]', sh).innerHTML = `
+        <div class="cl-hero">${avatar(c.name, 'lg')}
+          <div class="cl-id"><div class="nm" dir="auto">${esc(c.name)}</div>
+            <div class="muted">Client since ${dateOnly(c.created_at)}${c.last_order_at ? ` · last order ${dateOnly(c.last_order_at)}` : ''}</div></div></div>
+        <div class="cl-stats">
+          <div><span>Orders</span><b class="num">${c.orders}</b></div>
+          <div><span>Spent</span><b class="num">${fmt(c.spent)}<small>${esc(cur())}</small></b></div>
+          <div class="${c.unpaid_count ? 'owes' : ''}"><span>Not paid</span><b class="num">${fmt(c.unpaid_amount)}<small>${esc(cur())}</small></b></div>
+        </div>
+        ${c.phone || c.instagram ? `<div class="actions-grid cl-contact">
+          ${c.phone ? `<a class="btn wa" href="https://wa.me/${waDigits(c.phone)}" target="_blank" rel="noopener">${icon.wa}${esc(c.phone)}</a>` : ''}
+          ${c.instagram ? `<a class="btn ig" href="https://ig.me/m/${encodeURIComponent(c.instagram)}" target="_blank" rel="noopener">${icon.ig}@${esc(c.instagram)}</a>` : ''}
+        </div>` : '<p class="muted" style="font-size:13px;margin:0 0 12px">No WhatsApp number or Instagram saved yet — tap Edit to add one.</p>'}
+        ${c.note ? `<div class="cl-note">${esc(c.note)}</div>` : ''}
+        <button class="btn primary block" data-sell>${icon.plus}New sale for ${esc(c.name.split(' ')[0])}</button>
+        <div class="actions-grid" style="margin-top:10px">
+          <button class="btn" data-edit>${icon.edit}Edit</button>
+          <button class="btn danger" data-remove>Remove</button>
+        </div>
+        <div class="label" style="margin:22px 0 10px">Orders${sales.length ? ` · ${sales.length}` : ''}</div>
+        <div class="sales-list">${sales.length ? sales.map(saleRow).join('') : '<p class="muted" style="font-size:13px">No orders yet.</p>'}</div>`;
+      $$('.sale', sh).forEach((b) => (b.onclick = () => openSaleDetail(+b.dataset.id).catch((e) => toast('err', e.message))));
+      $('[data-sell]', sh).onclick = () => { closeSheet(); openNewSale({ client: c }); };
+      $('[data-edit]', sh).onclick = () => openClientEditor(c, (saved) => { data.client = saved; paint(); });
+      $('[data-remove]', sh).onclick = async () => {
+        const ok = await confirmSheet(`Remove ${c.name}?`, 'They will be hidden from your clients. Their sales and receipts stay. If you sell to them again they come back.', 'Yes, remove', true);
+        if (!ok) return;
+        try {
+          await api(`/api/clients/${c.id}/archive`, { body: { archived: true } });
+          closeSheet(); await refreshClients();
+          undoable(`${c.name} removed`, 'Their sales are kept', async () => {
+            await api(`/api/clients/${c.id}/archive`, { body: { archived: false } });
+            await refreshClients(); toast('ok', 'Undone', `${c.name} is back`);
+          });
+        } catch (err) { toast('err', 'Could not remove', err.message); }
+      };
+    };
+    paint();
+  }
+  async function refreshClients() {
+    await loadClients().catch(() => {});
+    if (S.view === 'clients') paintClients();
+  }
+
+  function openClientEditor(c, onSaved) {
+    const editing = !!c;
+    const sh = openSheet(`${sheetHead(editing ? 'Edit client' : 'New client')}
+      <div class="field"><label>Name</label><input class="input" data-f="name" dir="auto" placeholder="Client name" value="${esc(c ? c.name : '')}" autocomplete="off" /></div>
+      <div class="field"><label>WhatsApp number</label>
+        <div class="contact-input"><span class="ci-icon ${c && c.phone ? 'phone' : ''}">${icon.wa}</span>
+        <input class="input" data-f="phone" type="tel" inputmode="tel" placeholder="0944 123 456" value="${esc(c ? c.phone : '')}" autocomplete="off" /></div></div>
+      <div class="field"><label>Instagram</label>
+        <div class="contact-input"><span class="ci-icon ${c && c.instagram ? 'instagram' : ''}">${icon.ig}</span>
+        <input class="input" data-f="instagram" placeholder="@username" value="${esc(c && c.instagram ? '@' + c.instagram : '')}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" /></div></div>
+      <div class="field"><label>Note (size, address, likes…)</label><input class="input" data-f="note" placeholder="Optional" value="${esc(c ? c.note : '')}" /></div>
+      <button class="btn primary block" data-save>${editing ? 'Save changes' : 'Save client'}</button>`);
+    const f = (k) => $(`[data-f="${k}"]`, sh);
+    f('phone').oninput = (e) => { e.target.previousElementSibling.className = 'ci-icon ' + (isPhone(e.target.value) ? 'phone' : ''); };
+    f('instagram').oninput = (e) => { e.target.previousElementSibling.className = 'ci-icon ' + (e.target.value.trim() ? 'instagram' : ''); };
+    if (!editing && matchMedia('(hover: hover)').matches) setTimeout(() => f('name').focus(), 250);
+    $('[data-save]', sh).onclick = (e) => busy(e.currentTarget, async () => {
+      const body = { name: f('name').value, phone: f('phone').value.trim(), instagram: f('instagram').value, note: f('note').value };
+      if (!body.name.trim()) { f('name').focus(); return toast('err', 'Client name is missing'); }
+      if (body.phone && !isPhone(body.phone)) { f('phone').focus(); return toast('err', 'Check the number', 'Digits only, like 0944 123 456'); }
+      try {
+        const r = await api(editing ? `/api/clients/${c.id}` : '/api/clients', { method: editing ? 'PUT' : 'POST', body });
+        closeSheet(); await refreshClients();
+        toast('ok', editing ? 'Client saved' : 'Client added', r.client.name);
+        onSaved && onSaved(r.client);
+      } catch (err) { toast('err', 'Could not save', err.message); }
+    });
+  }
+
+  // Branded dropdown under the client-name box: saved clients, searchable by name, number or @instagram.
+  function attachClientPicker(input, onPick) {
+    const pop = document.createElement('div');
+    pop.className = 'combo-pop hidden';
+    pop.id = 'combo-' + Math.random().toString(36).slice(2);
+    pop.setAttribute('role', 'listbox');
+    const wrap = document.createElement('div');
+    wrap.className = 'combo';
+    input.before(wrap);
+    wrap.append(input, pop);
+    Object.entries({ role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-controls': pop.id }).forEach(([k, v]) => input.setAttribute(k, v));
+    let list = [], active = -1;
+    const mark = (text, q) => {
+      const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+      return i < 0 ? esc(text) : `${esc(text.slice(0, i))}<mark>${esc(text.slice(i, i + q.length))}</mark>${esc(text.slice(i + q.length))}`;
+    };
+    const hide = () => { pop.classList.add('hidden'); input.setAttribute('aria-expanded', 'false'); active = -1; };
+    const paint = () => {
+      if (document.activeElement !== input || !S.clients) return hide();
+      const q = input.value.trim();
+      list = matchClients(S.clients, q, false).slice(0, 6);
+      if (!list.length || (list.length === 1 && list[0].name.toLowerCase() === q.toLowerCase())) return hide();
+      pop.innerHTML = `<div class="combo-head">${q ? 'Saved clients' : 'Recent clients'}<span>${S.clients.length} saved</span></div>`
+        + list.map((c, i) => `<button type="button" tabindex="-1" class="combo-opt ${i === active ? 'on' : ''}" role="option" aria-selected="${i === active}" data-i="${i}">
+          ${avatar(c.name, 'sm')}<span class="co-main"><b dir="auto">${mark(c.name, q)}</b><small>${clientContact(c) ? esc(clientContact(c)) : 'No number saved'}</small></span>
+          <span class="co-meta">${c.orders ? `${c.orders} order${c.orders === 1 ? '' : 's'}` : 'New'}</span></button>`).join('');
+      pop.classList.remove('hidden');
+      input.setAttribute('aria-expanded', 'true');
+    };
+    const pick = (c) => { hide(); onPick(c); };
+    input.addEventListener('focus', paint);
+    input.addEventListener('input', () => { active = -1; paint(); });
+    input.addEventListener('blur', () => setTimeout(hide, 150));
+    input.addEventListener('keydown', (e) => {
+      if (pop.classList.contains('hidden')) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        active = (active + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
+        paint();
+      } else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); pick(list[active]); }
+      else if (e.key === 'Escape') { e.stopPropagation(); hide(); }
+    });
+    pop.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the keyboard open while tapping
+    pop.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (b) pick(list[+b.dataset.i]); });
+    return { refresh: paint };
   }
 
   // ---------- SETTINGS ----------
