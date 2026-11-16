@@ -10,7 +10,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 module.exports = function wholesale(ctx) {
-  const { app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard } = ctx;
+  const { app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard, fire } = ctx;
 
   db.exec(`
   CREATE TABLE IF NOT EXISTS wholesalers (
@@ -318,6 +318,7 @@ module.exports = function wholesale(ctx) {
         if (b.items) event(id, req.user, 'edited', null, 'Order changed by Yalla Wear');
         if (b.paid != null && !!b.paid !== !!o.paid) event(id, req.user, 'paid', null, b.paid ? 'Marked as paid' : 'Marked as not paid');
       })();
+      if (b.items) fire('wsOrderChanged', id, req.user);
       res.json({ order: orderFull(id), state: ctx.buildState() });
     } catch (e) { next(e); }
   });
@@ -337,6 +338,7 @@ module.exports = function wholesale(ctx) {
         db.prepare('UPDATE ws_orders SET status = ?, updated_at = ? WHERE id = ?').run(status, nowISO(), id);
         event(id, req.user, 'status', status, (req.body || {}).note || '');
       })();
+      fire('wsOrderChanged', id, req.user);
       res.json({ order: orderFull(id), state: ctx.buildState() });
     } catch (e) { next(e); }
   });
@@ -457,6 +459,7 @@ module.exports = function wholesale(ctx) {
         event(oid, req.ws.business_name, 'created', 'pending', '');
         return oid;
       })();
+      fire('wsOrderPlaced', orderFull(id));
       res.json({ order: orderFull(id, true) });
     } catch (e) { next(e); }
   });
@@ -482,6 +485,7 @@ module.exports = function wholesale(ctx) {
         db.prepare("UPDATE ws_orders SET status = 'cancelled', updated_at = ? WHERE id = ?").run(nowISO(), o.id);
         event(o.id, req.ws.business_name, 'status', 'cancelled', 'Cancelled by the wholesaler');
       })();
+      fire('wsOrderCancelled', orderFull(int(req.params.id)));
       res.json({ order: orderFull(int(req.params.id), true) });
     } catch (e) { next(e); }
   });

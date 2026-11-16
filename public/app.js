@@ -85,6 +85,7 @@
     undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>',
     chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/></svg>',
     store: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1.5-5h15L21 9"/><path d="M3 9h18v2a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0z"/><path d="M5 13v8h14v-8M10 21v-5h4v5"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
   };
@@ -281,6 +282,7 @@
           </div>
           <div class="top-actions">
             <span class="user-pill">${esc(S.me)}</span>
+            <button class="icon-btn todo-btn ${S.view === 'todo' ? 'on' : ''}" id="btn-todo" title="To do" aria-label="To do">${icon.check}${myOpen() ? `<span class="badge">${myOpen()}</span>` : ''}</button>
             <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">${icon.gear}</button>
             <button class="icon-btn" id="btn-logout" title="Log out" aria-label="Log out">${icon.out}</button>
           </div>
@@ -300,9 +302,10 @@
       S.view = b.dataset.view; renderShell();
     }));
     $('#btn-sell').onclick = () => openNewSale();
+    $('#btn-todo').onclick = () => { if (S.view !== 'todo') { S.enter = true; window.scrollTo(0, 0); S.todo = null; } S.view = 'todo'; renderShell(); };
     $('#btn-settings').onclick = openSettings;
     $('#btn-logout').onclick = async () => { await api('/api/logout', { body: {} }).catch(() => {}); S.me = null; renderLogin(); };
-    if (S.view === 'stock') renderStock(); else if (S.view === 'clients') renderClients(); else if (S.view === 'wholesale') renderWholesale(); else renderSales();
+    if (S.view === 'stock') renderStock(); else if (S.view === 'clients') renderClients(); else if (S.view === 'wholesale') renderWholesale(); else if (S.view === 'todo') renderTodo(); else renderSales();
     if (S.enter) { S.enter = false; $('#view').classList.add('enter'); countUp($('#view')); }
   }
 
@@ -1343,6 +1346,270 @@
     return { refresh: paint };
   }
 
+  // ---------- TO DO (design → DTF printing) ----------
+  // Printed items land on the designer's list; ticking "design done" moves them to the printer's list.
+  const LISTS = {
+    design: { icon: '🎨', en: 'Designs', verb: 'Design done & sent to printing' },
+    print: { icon: '🖨️', en: 'DTF printing', verb: 'Printed ✓' },
+    general: { icon: '📋', en: 'Other', verb: 'Done' },
+  };
+  Object.assign(S, { todo: null, todoTab: null });
+  const cap = (s) => String(s || '').replace(/^./, (c) => c.toUpperCase());
+  const myOpen = () => ((S.data && S.data.stats.tasks_open) || {})[S.me] || 0;
+  async function loadTodo(done = false) {
+    S.todo = await api(`/api/tasks${done ? '?status=done' : ''}`);
+    return S.todo;
+  }
+  function defaultTodoTab() {
+    if (S.todo && S.todo.roles.print === S.me && S.todo.roles.design !== S.me) return 'print';
+    return 'design';
+  }
+
+  function renderTodo() {
+    const T = S.todo;
+    const tab = S.todoTab || (T ? defaultTodoTab() : 'design');
+    const roles = T ? T.roles : {};
+    const listTasks = (l) => (T && tab !== 'done' ? T.tasks.filter((t) => t.list === l) : []);
+    const count = (l) => listTasks(l).length;
+    const tasks = !T ? null : tab === 'done' ? T.tasks : listTasks(tab);
+    const pushOn = 'Notification' in window && Notification.permission === 'granted' && S.pushOn;
+    $('#view').innerHTML = `
+      <div class="section-head" style="margin-top:4px">
+        <div class="section-title">To do</div>
+        <div class="section-actions">
+          <button class="btn sm ${pushOn ? '' : 'primary'}" data-push>${pushOn ? '🔔 On' : '🔔 Turn on notifications'}</button>
+        </div>
+      </div>
+      <div class="todo-tabs">
+        ${['design', 'print', 'general'].map((l) => `<button class="todo-tab ${tab === l ? 'on' : ''}" data-tt="${l}">
+          <span class="ic">${LISTS[l].icon}</span><span class="tx"><b>${LISTS[l].en}</b><small>${l === 'general' ? 'anyone' : cap(roles[l])}</small></span>${T && count(l) ? `<span class="n">${count(l)}</span>` : ''}</button>`).join('')}
+        <button class="todo-tab done ${tab === 'done' ? 'on' : ''}" data-tt="done"><span class="ic">✓</span><span class="tx"><b>Done</b><small>last ones</small></span></button>
+      </div>
+      ${tab !== 'done' ? `<div class="actions-grid todo-actions">
+        <button class="btn wa" data-wa-list ${tasks && tasks.length ? '' : 'disabled'}>${icon.wa}Send list on WhatsApp</button>
+        <button class="btn" data-add-task>${icon.plus}Add task</button>
+      </div>` : ''}
+      <div class="todo-list" id="todo-list">${tasks ? '' : '<div class="skel"></div>'.repeat(3)}</div>`;
+    $$('[data-tt]').forEach((b) => (b.onclick = async () => {
+      S.todoTab = b.dataset.tt;
+      if (b.dataset.tt === 'done') { S.todo = null; renderTodo(); await loadTodo(true).catch((e) => toast('err', e.message)); }
+      else if (T && T.done) { S.todo = null; renderTodo(); await loadTodo().catch((e) => toast('err', e.message)); }
+      if (S.view === 'todo') renderTodo();
+    }));
+    $('[data-push]').onclick = (e) => (pushOn ? openPushSheet() : enablePush(e.currentTarget));
+    const wa = $('[data-wa-list]'); if (wa) wa.onclick = () => sendTodoList(tab, tasks);
+    const add = $('[data-add-task]'); if (add) add.onclick = () => openTaskEditor(null, tab);
+    if (!T) { loadTodo(tab === 'done').then(() => { if (S.view === 'todo') renderTodo(); }).catch((e) => toast('err', e.message)); return; }
+    if (tab !== 'done') T.done = false; else T.done = true;
+    paintTodo(tasks, tab);
+  }
+
+  function paintTodo(tasks, tab) {
+    const el = $('#todo-list');
+    if (!tasks.length) {
+      el.innerHTML = `<div class="empty"><div class="em-ic">${tab === 'done' ? '✓' : LISTS[tab].icon}</div><b>${tab === 'done' ? 'Nothing done yet' : 'All clear 🎉'}</b>${tab === 'design' ? 'Sales and wholesale orders with a print show up here by themselves.' : tab === 'print' ? 'When a design is done it moves here for DTF printing.' : tab === 'done' ? '' : 'Tap “Add task” for anything else.'}</div>`;
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    el.innerHTML = tasks.map((t) => {
+      const late = t.due_date && t.due_date < today && t.status === 'open';
+      const pcs = t.items.reduce((a, i) => a + i.qty, 0);
+      return `<div class="task ${t.status === 'done' ? 'is-done' : ''} ${late ? 'late' : ''}" data-tid="${t.id}">
+        <button class="tick" data-tick="${t.id}" aria-label="${t.status === 'done' ? 'Mark as not done' : LISTS[t.list].verb}" title="${LISTS[t.list].verb}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+        <div class="tk-main" data-open-task="${t.id}">
+          <div class="tk-title">${esc(t.title)}</div>
+          ${t.items.length ? `<div class="items">${t.items.map((i) => `<span class="mini print"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)} · ${i.print === 'front_back' ? 'F+B' : 'F'}</span>`).join('')}</div>`
+    : t.details ? `<div class="tk-details">${esc(t.details)}</div>` : ''}
+          <div class="tk-meta">${t.status === 'done' ? `✓ ${esc(cap(t.done_by))} · ${dateFmt(t.done_at)} · ${LISTS[t.list].en}` : `${t.list === 'general' ? `<span class="pill new">${esc(cap(t.assignee))}</span> ` : ''}${t.due_date ? `<b class="${late ? 'late-tag' : ''}">${late ? 'Late · ' : 'Due '}${esc(t.due_date)}</b> · ` : ''}${pcs ? `${pcs} pcs · ` : ''}${dateFmt(t.created_at)}`}</div>
+        </div>
+        ${t.source_type ? `<button class="btn sm ghost tk-src" data-src="${t.source_type}:${t.source_id}">${t.source_type === 'sale' ? invNo(t.source_id) : 'WS-' + String(t.source_id).padStart(4, '0')}${icon.chevron}</button>` : ''}
+      </div>`;
+    }).join('');
+    $$('[data-tick]', el).forEach((b) => (b.onclick = () => tickTask(+b.dataset.tick, b)));
+    $$('[data-open-task]', el).forEach((b) => (b.onclick = () => { const t = S.todo.tasks.find((x) => x.id === +b.dataset.openTask); if (t && !t.source_type && t.status === 'open') openTaskEditor(t); }));
+    $$('[data-src]', el).forEach((b) => (b.onclick = () => { const [type, id] = b.dataset.src.split(':'); if (type === 'sale') openSaleDetail(+id).catch((e) => toast('err', e.message)); else openWsOrder(+id); }));
+  }
+
+  async function tickTask(id, btn) {
+    const t = S.todo.tasks.find((x) => x.id === id);
+    const done = t.status !== 'done';
+    const card = btn.closest('.task');
+    busy(btn, async () => {
+      try {
+        if (done) card.classList.add('ticking');
+        const r = await api(`/api/tasks/${id}/done`, { body: { done } });
+        S.data.stats.tasks_open = r.counts;
+        await new Promise((res) => setTimeout(res, done ? 380 : 0));
+        await loadTodo(!done);
+        if (S.view === 'todo') renderShell();
+        const msg = r.created ? `Moved to ${cap(S.todo.roles.print)}’s DTF printing list 🖨️` : done ? t.title : 'Back on the list';
+        undoable(done ? (t.list === 'design' && r.created ? 'Design done ✓' : 'Done ✓') : 'Not done', msg, async () => {
+          const u = await api(`/api/tasks/${id}/done`, { body: { done: !done } });
+          S.data.stats.tasks_open = u.counts;
+          await loadTodo(S.todo && S.todo.done);
+          if (S.view === 'todo') renderShell();
+        });
+      } catch (e) { card.classList.remove('ticking'); toast('err', 'Could not save', e.message); }
+    });
+  }
+
+  function sendTodoList(tab, tasks) {
+    const roles = S.todo.roles;
+    const who = tab === 'general' ? '' : cap(roles[tab]);
+    const phone = tab === 'design' ? roles.design_phone : tab === 'print' ? roles.print_phone : '';
+    const lines = [
+      `📋 Yalla Wear — ${LISTS[tab].en}${who ? ` for ${who}` : ''} (${tasks.length})`,
+      '',
+      ...tasks.flatMap((t, i) => [
+        `${i + 1}. ${t.title.replace(/^(Design|DTF print) · /, '')}${t.due_date ? ` — due ${t.due_date}` : ''}${t.list === 'general' ? ` (${cap(t.assignee)})` : ''}`,
+        ...(t.items.length ? t.items.map((x) => `   • ${x.qty}× ${x.product} ${x.color} ${x.size} — ${x.print === 'front_back' ? 'Front + back' : 'Front'}`) : t.details ? t.details.split('\n').map((d) => `   ${d}`) : []),
+      ]),
+      '',
+      `Open the list: ${location.origin}/?view=todo`,
+    ];
+    const text = lines.join('\n');
+    window.open(`https://wa.me/${phone ? waDigits(phone) : ''}?text=${encodeURIComponent(text)}`, '_blank');
+  }
+
+  function openTaskEditor(t, tab = 'general') {
+    const users = S.users || [S.me];
+    const list = t ? t.list : (tab === 'done' ? 'general' : tab);
+    const roles = S.todo.roles;
+    const sh = openSheet(`${sheetHead(t ? 'Edit task' : 'New task')}
+      <div class="field"><label>What has to be done</label><input class="input" data-f="title" dir="auto" maxlength="140" value="${esc(t ? t.title : '')}" placeholder="e.g. Design the logo for Lattakia Style" /></div>
+      <div class="field"><label>Details (optional)</label><textarea class="input" data-f="details" dir="auto" rows="3" maxlength="1000" placeholder="Sizes, colors, where the file is…">${esc(t ? t.details : '')}</textarea></div>
+      <div class="field"><label>List</label><div class="seg">${['design', 'print', 'general'].map((l) => `<button class="${list === l ? 'on' : ''}" data-l="${l}">${LISTS[l].icon} ${LISTS[l].en}</button>`).join('')}</div></div>
+      <div class="field"><label>Who does it</label><div class="chips" data-who>${users.map((u) => `<button class="chip ${(t ? t.assignee : list === 'general' ? S.me : roles[list]) === u ? 'on' : ''}" data-u="${esc(u)}">${avatar(u, 'sm')}${esc(cap(u))}</button>`).join('')}</div></div>
+      <div class="field"><label>Due date (optional)</label><input class="input" type="date" data-f="due_date" value="${esc(t ? t.due_date : '')}" /></div>
+      <button class="btn primary block" data-save>${t ? 'Save' : 'Add task'}</button>
+      ${t ? '<button class="btn danger block" data-del style="margin-top:10px">Delete task</button>' : ''}`);
+    let L = list;
+    let who = t ? t.assignee : list === 'general' ? S.me : roles[list];
+    $$('[data-l]', sh).forEach((b) => (b.onclick = () => {
+      L = b.dataset.l; $$('[data-l]', sh).forEach((x) => x.classList.toggle('on', x === b));
+      if (L !== 'general') { who = roles[L]; $$('[data-u]', sh).forEach((x) => x.classList.toggle('on', x.dataset.u === who)); }
+    }));
+    $$('[data-u]', sh).forEach((b) => (b.onclick = () => { who = b.dataset.u; $$('[data-u]', sh).forEach((x) => x.classList.toggle('on', x === b)); }));
+    if (!t && matchMedia('(hover: hover)').matches) setTimeout(() => $('[data-f="title"]', sh).focus(), 250);
+    $('[data-save]', sh).onclick = (e) => busy(e.currentTarget, async () => {
+      const body = { list: L, assignee: who, title: $('[data-f="title"]', sh).value, details: $('[data-f="details"]', sh).value, due_date: $('[data-f="due_date"]', sh).value };
+      if (!body.title.trim()) { $('[data-f="title"]', sh).focus(); return toast('err', 'Write what has to be done'); }
+      try {
+        const r = await api(t ? `/api/tasks/${t.id}` : '/api/tasks', { method: t ? 'PUT' : 'POST', body });
+        S.data.stats.tasks_open = r.counts;
+        closeSheet(); S.todoTab = L; await loadTodo(); renderShell();
+        toast('ok', t ? 'Task saved' : 'Task added', who !== S.me ? `${cap(who)} gets a notification` : body.title);
+      } catch (err) { toast('err', 'Could not save', err.message); }
+    });
+    const del = $('[data-del]', sh);
+    if (del) del.onclick = () => busy(del, async () => {
+      try {
+        const r = await api(`/api/tasks/${t.id}`, { method: 'DELETE' });
+        S.data.stats.tasks_open = r.counts; closeSheet(); await loadTodo(); renderShell();
+        undoable('Task deleted', t.title, async () => { const u = await api(`/api/tasks/${t.id}/restore`, { body: {} }); S.data.stats.tasks_open = u.counts; await loadTodo(); renderShell(); });
+      } catch (err) { toast('err', err.message); }
+    });
+  }
+
+  // ---------- notifications on this phone ----------
+  // A short chime for when the app is open (iPhone plays its own sound for push notifications).
+  let audio = null;
+  const unlockAudio = () => {
+    try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch { /* no audio */ }
+  };
+  document.addEventListener('pointerdown', unlockAudio, { once: false, passive: true });
+  function chime() {
+    try {
+      if (!audio) return;
+      const t0 = audio.currentTime;
+      [[880, 0], [1318.5, 0.13]].forEach(([f, d]) => {
+        const o = audio.createOscillator(), g = audio.createGain();
+        o.type = 'sine'; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t0 + d); g.gain.exponentialRampToValueAtTime(0.25, t0 + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d + 0.45);
+        o.connect(g).connect(audio.destination); o.start(t0 + d); o.stop(t0 + d + 0.5);
+      });
+      if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+    } catch { /* ignore */ }
+  }
+  const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  const b64ToBytes = (b64) => { const s = atob((b64 + '='.repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, (c) => c.charCodeAt(0)); };
+
+  async function checkPush() {
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window) || Notification.permission !== 'granted') { S.pushOn = false; return; }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      S.pushOn = !!sub;
+      if (sub) api('/api/push/subscribe', { body: { subscription: sub.toJSON() } }).catch(() => {}); // keeps it linked to who is logged in
+    } catch { S.pushOn = false; }
+  }
+  function enablePush(btn) {
+    unlockAudio();
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      if (isIOS() && !isStandalone()) return openIosHelp();
+      return toast('err', 'This browser can’t get notifications', 'Use Safari on iPhone (added to the Home Screen) or Chrome on Android', 7000);
+    }
+    // asked straight from the tap — iPhone only shows the question then
+    const ask = Notification.requestPermission();
+    busy(btn, async () => {
+      try {
+        const perm = await ask;
+        if (perm !== 'granted') return toast('err', 'Notifications are off', isIOS() ? 'iPhone Settings → Notifications → Yalla Stock → Allow' : 'Allow them in the browser settings for this site', 8000);
+        const reg = await navigator.serviceWorker.ready;
+        const { key } = await api('/api/push/key');
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+        await api('/api/push/subscribe', { body: { subscription: sub.toJSON() } });
+        S.pushOn = true;
+        toast('ok', 'Notifications on 🔔', 'Sending a test one now…');
+        await api('/api/push/test', { body: {} });
+        if (S.view === 'todo') renderTodo();
+      } catch (e) { toast('err', 'Could not turn them on', e.message, 7000); }
+    });
+  }
+  function openIosHelp() {
+    openSheet(`${sheetHead('Notifications on iPhone')}
+      <p class="muted" style="margin-top:0">iPhone only sends notifications to apps on the Home Screen. Two steps:</p>
+      <ol class="ios-steps">
+        <li>In Safari tap <b>Share</b> <span class="share-ic">⬆︎</span> → <b>Add to Home Screen</b> → <b>Add</b>.</li>
+        <li>Open <b>Yalla Stock</b> from the new icon, go to <b>To do</b> and tap <b>🔔 Turn on notifications</b> → <b>Allow</b>.</li>
+      </ol>
+      <p class="muted" style="font-size:13px">Needs iOS 16.4 or newer. They come with the normal iPhone notification sound, even when the app is closed. If you don't hear them, check that Silent mode and Focus are off.</p>
+      <button class="btn primary block" data-close>Got it</button>`);
+  }
+  function openPushSheet() {
+    const sh = openSheet(`${sheetHead('Notifications')}
+      <p class="muted" style="margin-top:0">This phone gets a notification with sound when:</p>
+      <ul class="ios-steps"><li>a new design or task is given to you</li><li>a design is ready for DTF printing</li><li>something is printed</li><li>a wholesaler sends or cancels an order</li></ul>
+      <button class="btn primary block" data-test>Send a test notification</button>
+      <button class="btn block" data-off style="margin-top:10px">Turn off on this phone</button>`);
+    $('[data-test]', sh).onclick = (e) => busy(e.currentTarget, async () => { await api('/api/push/test', { body: {} }); toast('ok', 'Sent', 'It should arrive in a few seconds'); });
+    $('[data-off]', sh).onclick = (e) => busy(e.currentTarget, async () => {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) { await api('/api/push/unsubscribe', { body: { endpoint: sub.endpoint } }); await sub.unsubscribe(); }
+        S.pushOn = false; closeSheet(); if (S.view === 'todo') renderTodo(); toast('ok', 'Notifications off on this phone');
+      } catch (err) { toast('err', err.message); }
+    });
+  }
+  // messages from the service worker: a push arrived while the app is open, or a notification was tapped
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').then(() => checkPush()).catch(() => {});
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      const m = e.data || {};
+      if (m.type === 'push') { chime(); toast('ok', m.title || 'Yalla Stock', m.body || '', 6000); sync(); if (S.view === 'todo') loadTodo().then(() => S.view === 'todo' && renderTodo()).catch(() => {}); }
+      if (m.type === 'open') openFromUrl(m.url);
+    });
+  }
+  function openFromUrl(url) {
+    try {
+      const v = new URL(url, location.origin).searchParams.get('view');
+      if (['todo', 'wholesale', 'sales', 'clients', 'stock'].includes(v) && S.data) { S.view = v; if (v === 'todo') S.todo = null; renderShell(); }
+    } catch { /* ignore */ }
+  }
+
   // ---------- WHOLESALE (admin side) ----------
   // Shops with a login order on /wholesale. Here you see their orders, accept/reject them, move them along,
   // edit anything, mark paid, and the invoice they download is remade after every change.
@@ -1819,6 +2086,16 @@
           ${st.logo ? '<button class="btn sm danger" data-logo-rm style="flex:0 0 auto">Remove</button>' : ''}
         </div>
       </div>
+      <div class="label" style="margin:20px 0 8px">Team · to-do lists</div>
+      <div class="row stack-sm">
+        <div class="field"><label>🎨 Makes the designs</label><select class="input" data-k="design_user">${(S.users || []).map((u) => `<option value="${esc(u)}" ${st.design_user === u ? 'selected' : ''}>${esc(cap(u))}</option>`).join('')}</select></div>
+        <div class="field"><label>Their WhatsApp (for the list)</label><input class="input" data-k="design_phone" type="tel" inputmode="tel" value="${esc(st.design_phone || '')}" placeholder="0944 123 456" /></div>
+      </div>
+      <div class="row stack-sm">
+        <div class="field"><label>🖨️ Does the DTF printing</label><select class="input" data-k="print_user">${(S.users || []).map((u) => `<option value="${esc(u)}" ${st.print_user === u ? 'selected' : ''}>${esc(cap(u))}</option>`).join('')}</select></div>
+        <div class="field"><label>Their WhatsApp (for the list)</label><input class="input" data-k="print_phone" type="tel" inputmode="tel" value="${esc(st.print_phone || '')}" placeholder="0944 123 456" /></div>
+      </div>
+      <button class="btn block" data-notif style="margin-bottom:14px">🔔 Notifications on this phone</button>
       <div class="label" style="margin:20px 0 8px">Wholesale portal</div>
       <div class="ws-portal card">
         <div><small class="muted">Wholesalers log in here</small><div class="mono" style="overflow-wrap:anywhere">${esc(portalLink())}</div></div>
@@ -1830,6 +2107,7 @@
       <a class="btn block" href="/api/backup" download style="margin-top:10px">${icon.down}Download backup (all stock + sales)</a>`, { wide: true });
 
     $('[data-copy-portal]', sh).onclick = () => { copyText(portalLink()); toast('ok', 'Portal link copied 📋'); };
+    $('[data-notif]', sh).onclick = (e) => (S.pushOn ? openPushSheet() : enablePush(e.currentTarget));
     $('[data-newp]', sh).onclick = () => { closeSheet(); openProductEditor(); };
     $$('[data-editp]', sh).forEach((b) => (b.onclick = () => { closeSheet(); S.pid = +b.dataset.editp; openProductEditor(+b.dataset.editp); }));
     $$('[data-restore]', sh).forEach((b) => (b.onclick = async () => {
@@ -2034,6 +2312,10 @@
     syncing = true;
     try {
       const fresh = await api('/api/state');
+      // a new task for me since last check: chime + note (the push notification covers a closed app)
+      const mineBefore = myOpen(), mineNow = (fresh.stats.tasks_open || {})[S.me] || 0;
+      if (mineNow > mineBefore) { chime(); toast('ok', `📋 ${mineNow - mineBefore} new task${mineNow - mineBefore === 1 ? '' : 's'} for you`, 'Tap the ✓ button at the top', 6000); }
+      if (JSON.stringify(fresh.stats.tasks_open) !== JSON.stringify(S.data.stats.tasks_open)) S.todo = null;
       const changed = fresh.stock.filter((r) => {
         const old = S.data.stock.find((o) => o.color_id === r.color_id && o.size_id === r.size_id);
         return !old || old.qty !== r.qty;
@@ -2070,8 +2352,12 @@
     try {
       const me = await api('/api/me');
       S.me = me.username;
+      S.users = me.users;
       S.defaultPasswords = me.default_passwords;
       S.data = await api('/api/state');
+      // opened from a notification or a shared list link: /?view=todo
+      const v = new URLSearchParams(location.search).get('view');
+      if (['todo', 'wholesale', 'sales', 'clients'].includes(v)) { S.view = v; history.replaceState(null, '', '/'); }
       S.enter = true;
       renderShell();
       const a = alerts();

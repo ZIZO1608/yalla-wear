@@ -299,12 +299,16 @@ function buildState() {
       month_sales: month.sales, month_pieces: monthPieces, month_revenue: month.revenue,
       unpaid_count: unpaid.n, unpaid_amount: unpaid.amount, best_seller: best,
       ws_pending: db.prepare("SELECT COUNT(*) n FROM ws_orders WHERE status = 'pending'").get().n,
+      tasks_open: Object.fromEntries(db.prepare("SELECT assignee, COUNT(*) n FROM tasks WHERE status = 'open' GROUP BY assignee").all().map((r) => [r.assignee, r.n])),
     },
   };
 }
 
 // ---------- app ----------
 const app = express();
+// filled in by tasks.js: sales and wholesale orders tell the to-do lists when they change
+const hooks = {};
+const fire = (name, ...args) => { try { if (hooks[name]) hooks[name](...args); } catch (e) { console.warn('[yalla] hook', name, e.message); } };
 app.disable('x-powered-by');
 // Coolify's Traefik proxy sits on the private Docker network; only trust forwarded headers from there.
 app.set('trust proxy', 'loopback, linklocal, uniquelocal');
@@ -367,7 +371,7 @@ app.post('/api/logout', (req, res) => {
   res.clearCookie('ys_session');
   res.json({ ok: true });
 });
-app.get('/api/me', auth, (req, res) => res.json({ username: req.user, default_passwords: DEFAULT_PASSWORDS }));
+app.get('/api/me', auth, (req, res) => res.json({ username: req.user, default_passwords: DEFAULT_PASSWORDS, users: Object.keys(USERS) }));
 app.get('/api/state', auth, (req, res) => res.json(buildState()));
 
 // ---- products ----
@@ -497,6 +501,7 @@ app.post('/api/sales', auth, (req, res, next) => {
       for (const l of lines) insertSaleLine(saleId, l);
       return saleId;
     })();
+    fire('saleChanged', id, req.user);
     res.json({ sale: saleWithItems(id), state: buildState() });
   } catch (e) { next(e); }
 });
@@ -534,6 +539,7 @@ app.put('/api/sales/:id', auth, (req, res, next) => {
         .run(customer, phone, instagram, clientId, m.subtotal, m.discount, m.total, b.paid === false ? 0 : 1, str(b.note, 300),
           gift.gift, gift.gift_to, gift.gift_message, gift.gift_hide_prices, gift.gift_wrap, now, id);
     })();
+    fire('saleChanged', id, req.user);
     res.json({ sale: saleWithItems(id), state: buildState() });
   } catch (e) { next(e); }
 });
@@ -575,6 +581,7 @@ app.post('/api/sales/:id/cancel', auth, (req, res, next) => {
           .run(now, req.user, it.color_id, it.size_id, it.qty, id);
       }
     })();
+    fire('saleChanged', id, req.user);
     res.json({ sale: saleWithItems(id), state: buildState() });
   } catch (e) { next(e); }
 });
@@ -604,6 +611,7 @@ app.post('/api/sales/:id/restore', auth, (req, res, next) => {
           .run(now, req.user, it.color_id, it.size_id, -it.qty, id);
       }
     })();
+    fire('saleChanged', id, req.user);
     res.json({ sale: saleWithItems(id), state: buildState() });
   } catch (e) { next(e); }
 });
@@ -815,7 +823,7 @@ app.get('/api/export/clients.csv', auth, (req, res) => {
 app.put('/api/settings', auth, (req, res, next) => {
   try {
     const numeric = ['low_threshold', 'high_threshold', 'gift_wrap_price'];
-    const text = ['currency', 'shop_phone', 'shop_instagram', 'receipt_note', 'logo', 'ws_welcome', 'ws_show_stock'];
+    const text = ['currency', 'shop_phone', 'shop_instagram', 'receipt_note', 'logo', 'ws_welcome', 'ws_show_stock', 'design_user', 'print_user', 'design_phone', 'print_phone'];
     const up = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
     db.transaction(() => {
       for (const k of numeric) if (req.body[k] != null) {
@@ -980,10 +988,11 @@ ${cancelled ? '<div class="x">This sale was cancelled · <span class="ar">تم �
 </div></body></html>`);
 });
 
-// ---- wholesale portal (wholesale.js) ----
+// ---- wholesale portal (wholesale.js) + to-do lists and phone notifications (tasks.js) ----
 require('./wholesale')({
-  app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard, buildState,
+  app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard, buildState, fire,
 });
+require('./tasks')({ app, db, auth, HttpError, int, str, nowISO, getSettings, users: Object.keys(USERS), hooks });
 
 app.get('/healthz', (req, res) => { db.prepare('SELECT 1').get(); res.json({ ok: true }); });
 

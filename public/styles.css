@@ -781,3 +781,45 @@ table.stock.order-grid { table-layout: auto; min-width: max-content; width: 100%
 .oc input { min-width: 58px; }
 table.stock.order-grid { width: max-content; min-width: 100%; }
 .order-grid .oc input { width: 60px; min-width: 0; }
+
+/* ---------- to do ---------- */
+.todo-btn { position: relative; }
+.todo-btn.on { background: var(--mint-soft); color: var(--mint); border-color: rgba(192, 219, 198, .4); }
+.todo-btn .badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--bg); }
+.todo-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.todo-tab { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text); text-align: left; min-width: 0; }
+.todo-tab .ic { font-size: 20px; flex: none; }
+.todo-tab .tx { display: flex; flex-direction: column; min-width: 0; }
+.todo-tab b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.todo-tab small { font-size: 11px; color: var(--muted); }
+.todo-tab .n { position: absolute; top: -7px; right: -5px; min-width: 20px; height: 20px; border-radius: 10px; background: var(--mint); color: var(--mint-ink); font-size: 12px; font-weight: 800; display: grid; place-items: center; padding: 0 6px; }
+.todo-tab.on { border-color: var(--mint); background: var(--mint-soft); }
+.todo-tab.done .ic { color: var(--mint); font-weight: 800; }
+.todo-actions { margin: 0 0 14px; }
+.todo-list { display: flex; flex-direction: column; gap: 10px; }
+.task { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--line); transition: opacity .3s, transform .3s; }
+.task.late { border-color: rgba(255, 92, 108, .45); }
+.task .tick { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--line-2); background: var(--bg-2); color: transparent; display: grid; place-items: center; transition: background .15s, border-color .15s, color .15s, transform .1s; }
+.task .tick svg { width: 18px; height: 18px; }
+.task .tick:active { transform: scale(.9); }
+.task.is-done .tick, .task.ticking .tick { background: var(--mint); border-color: var(--mint); color: var(--mint-ink); }
+.task.ticking { opacity: .45; transform: translateX(12px); }
+.task.is-done .tk-title { text-decoration: line-through; color: var(--muted); }
+.tk-main { flex: 1; min-width: 0; cursor: pointer; }
+.tk-title { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
+.tk-main .items { margin-top: 8px; }
+.tk-details { font-size: 13px; color: var(--muted); margin-top: 4px; white-space: pre-line; }
+.tk-meta { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.tk-meta .late-tag { color: var(--red); }
+.tk-src { flex: none; font-family: var(--display); font-size: 16px; letter-spacing: .5px; padding: 6px 6px 6px 10px; }
+.tk-src svg { width: 14px; height: 14px; }
+.ios-steps { padding-left: 20px; line-height: 1.6; margin: 0 0 14px; }
+.ios-steps li { margin-bottom: 6px; }
+.share-ic { display: inline-block; border: 1px solid var(--line-2); border-radius: 6px; padding: 0 5px; font-size: 12px; }
+@media (max-width: 560px) {
+  .todo-tabs { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 460px) {
+  .tk-src { position: absolute; right: 12px; top: 12px; }
+  .task { position: relative; padding-right: 92px; }
+}
