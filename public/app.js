@@ -1032,6 +1032,7 @@
       $('[data-body]', sh).innerHTML = `
         <div style="display:flex;gap:8px;align-items:center;margin:-6px 0 12px;flex-wrap:wrap">
           ${cancelled ? '<span class="pill cancelled">Cancelled</span>' : sale.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>'}
+          ${!cancelled && sale.delivered_at ? `<span class="pill done" title="${esc(dateFmt(sale.delivered_at))}">📦 Delivered</span>` : ''}
           <span class="muted" style="font-size:13px">${dateFmt(sale.created_at)} · by ${esc(sale.created_by)}</span>
         </div>
         <div class="kv"><span>Client</span>${sale.client_id ? `<button class="link-btn" data-open-client dir="auto">${esc(sale.customer_name)}${icon.chevron}</button>` : `<b dir="auto">${esc(sale.customer_name)}</b>`}</div>
@@ -1055,8 +1056,10 @@
         <button class="btn block" data-edit-sale style="margin-top:10px">${icon.edit}Edit sale (name, items, prices, gift…)</button>
         <div class="actions-grid">
           <button class="btn" data-toggle-paid>${sale.paid ? 'Mark as not paid' : 'Mark as paid ✓'}</button>
-          <button class="btn danger" data-cancel>Cancel sale</button>
-        </div>`}`;
+          <button class="btn" data-toggle-delivered>${sale.delivered_at ? 'Not delivered yet' : '📦 Mark delivered'}</button>
+        </div>
+        ${sale.delivered_at ? `<p class="muted" style="font-size:12px;margin:8px 0 0">Delivered ${dateFmt(sale.delivered_at)} by ${esc(sale.delivered_by || '')}</p>` : ''}
+        <button class="btn danger block" data-cancel style="margin-top:10px">Cancel sale</button>`}`;
       const oc = $('[data-open-client]', sh);
       if (oc) oc.onclick = () => openClient(sale.client_id);
       if (cancelled) {
@@ -1068,6 +1071,14 @@
         if (!S.clients) await loadClients().catch(() => {});
         openNewSale({ edit: sale, onSaved: (fresh) => { sale = fresh; if (sh.isConnected) paint(); renderShell(); } });
       };
+      $('[data-toggle-delivered]', sh).onclick = (e) => busy(e.currentTarget, async () => {
+        const want = !sale.delivered_at;
+        try {
+          apply(await api(`/api/sales/${sale.id}/delivered`, { body: { delivered: want } }));
+          S.todo = null;
+          undoable(want ? 'Delivered 📦' : 'Marked not delivered', invNo(sale.id), async () => { apply(await api(`/api/sales/${sale.id}/delivered`, { body: { delivered: !want } })); S.todo = null; });
+        } catch (err) { toast('err', err.message); }
+      });
       $('[data-toggle-paid]', sh).onclick = (e) => busy(e.currentTarget, async () => {
         const want = !sale.paid;
         try {
@@ -1141,7 +1152,7 @@
       const state = s.cancelled_at ? '<span class="pill cancelled">Cancelled</span>' : s.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>';
       return `<button class="sale ${s.cancelled_at ? 'is-cancelled' : s.paid ? '' : 'is-unpaid'}" data-id="${s.id}">
         <div class="main">
-          <div class="top"><span class="inv">${invNo(s.id)}</span><span class="who" dir="auto">${esc(s.customer_name)}</span>${state}${s.gift ? '<span class="pill gift" title="Gift">🎁</span>' : ''}</div>
+          <div class="top"><span class="inv">${invNo(s.id)}</span><span class="who" dir="auto">${esc(s.customer_name)}</span>${state}${s.delivered_at && !s.cancelled_at ? '<span class="pill done" title="Delivered">📦</span>' : ''}${s.gift ? '<span class="pill gift" title="Gift">🎁</span>' : ''}</div>
           <div class="items">${s.items.map((i) => `<span class="mini ${i.print_type !== 'none' ? 'print' : ''}"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)}${i.print_type === 'front' ? ' · F' : i.print_type === 'front_back' ? ' · F+B' : ''}</span>`).join('')}</div>
           <div class="when">${dateFmt(s.created_at)} · ${esc(s.created_by)}${contactOf(s) ? ` · <span style="white-space:nowrap">${esc(contactOf(s))}</span>` : ''}</div>
         </div>
@@ -1346,137 +1357,215 @@
     return { refresh: paint };
   }
 
-  // ---------- TO DO (design → DTF printing) ----------
-  // Printed items land on the designer's list; ticking "design done" moves them to the printer's list.
+  // ---------- TO DO: orders → design → DTF printing → delivered ----------
+  // Every sale and wholesale order shows up under Orders by itself. Orders with a print also go to the designer,
+  // then to the printer. Ticking an order means it was handed over (the sale / wholesale order is marked delivered).
   const LISTS = {
-    design: { icon: '🎨', en: 'Designs', verb: 'Design done & sent to printing' },
-    print: { icon: '🖨️', en: 'DTF printing', verb: 'Printed ✓' },
-    general: { icon: '📋', en: 'Other', verb: 'Done' },
+    order: { icon: '📦', en: 'Orders', who: 'Team', verb: 'Delivered', empty: 'Every new sale and wholesale order shows up here by itself.' },
+    design: { icon: '🎨', en: 'Designs', verb: 'Design sent to print', empty: 'Orders with a print show up here for the design.' },
+    print: { icon: '🖨️', en: 'DTF printing', verb: 'Printed', empty: 'When a design is sent to print it moves here.' },
+    general: { icon: '📋', en: 'Other', who: 'Anyone', verb: 'Done', empty: 'Tap “Add task” for anything else.' },
   };
-  Object.assign(S, { todo: null, todoTab: null });
+  Object.assign(S, { todo: null, todoTab: null, todoType: 'all', todoQ: '' });
   const cap = (s) => String(s || '').replace(/^./, (c) => c.toUpperCase());
-  const myOpen = () => ((S.data && S.data.stats.tasks_open) || {})[S.me] || 0;
+  // my open tasks + the team's open orders
+  const myOpen = (counts) => { const c = counts || (S.data && S.data.stats.tasks_open) || {}; return (c[S.me] || 0) + (c[''] || 0); };
+  const ago = (iso) => {
+    const m = Math.round((Date.now() - new Date(iso)) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m} min ago`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h} h ago`;
+    const d = Math.round(h / 24);
+    return d < 8 ? `${d} day${d === 1 ? '' : 's'} ago` : dateOnly(iso);
+  };
+  const todayISO = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
   async function loadTodo(done = false) {
     S.todo = await api(`/api/tasks${done ? '?status=done' : ''}`);
+    S.todo.done = done;
+    if (S.data) S.data.stats.tasks_open = S.todo.counts;
     return S.todo;
   }
-  function defaultTodoTab() {
-    if (S.todo && S.todo.roles.print === S.me && S.todo.roles.design !== S.me) return 'print';
-    return 'design';
+  const isLate = (t) => t.status === 'open' && t.due_date && t.due_date < todayISO();
+  function todoFilter(list) {
+    const q = S.todoQ.trim().toLowerCase();
+    return list.filter((t) => {
+      if (S.todoType === 'sale' && t.source_type !== 'sale') return false;
+      if (S.todoType === 'ws' && t.source_type !== 'ws') return false;
+      if (S.todoType === 'unpaid' && !(t.source && !t.source.paid)) return false;
+      if (S.todoType === 'late' && !isLate(t)) return false;
+      if (S.todoType === 'mine' && t.assignee !== S.me && t.assignee !== '') return false;
+      if (q && !`${t.title} ${t.details}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
   }
+  const sortTasks = (list) => [...list].sort((a, b) => (isLate(b) - isLate(a)) || ((a.due_date || '9') < (b.due_date || '9') ? -1 : (a.due_date || '9') > (b.due_date || '9') ? 1 : 0) || (b.id - a.id));
 
   function renderTodo() {
     const T = S.todo;
-    const tab = S.todoTab || (T ? defaultTodoTab() : 'design');
-    const roles = T ? T.roles : {};
-    const listTasks = (l) => (T && tab !== 'done' ? T.tasks.filter((t) => t.list === l) : []);
-    const count = (l) => listTasks(l).length;
-    const tasks = !T ? null : tab === 'done' ? T.tasks : listTasks(tab);
+    const done = S.todoTab === 'done';
+    if (!T || T.done !== done) {
+      $('#view').innerHTML = `<div class="section-head" style="margin-top:4px"><div class="section-title">To do</div></div>${'<div class="skel"></div>'.repeat(4)}`;
+      loadTodo(done).then(() => { if (S.view === 'todo') renderShell(); }).catch((e) => toast('err', e.message));
+      return;
+    }
+    const roles = T.roles;
+    if (!S.todoTab) S.todoTab = 'order';
+    const tab = S.todoTab;
+    const of = (l) => T.tasks.filter((t) => t.list === l);
+    const tasks = sortTasks(todoFilter(done ? T.tasks : of(tab)));
+    const lateN = done ? 0 : T.tasks.filter(isLate).length;
     const pushOn = 'Notification' in window && Notification.permission === 'granted' && S.pushOn;
+    const typeChips = [['all', 'All'], ['sale', '🛍️ Sales'], ['ws', '🏬 Wholesale'], ['unpaid', 'Not paid'], ['late', `Late${lateN ? ' · ' + lateN : ''}`], ['mine', 'Mine']];
     $('#view').innerHTML = `
       <div class="section-head" style="margin-top:4px">
         <div class="section-title">To do</div>
-        <div class="section-actions">
-          <button class="btn sm ${pushOn ? '' : 'primary'}" data-push>${pushOn ? '🔔 On' : '🔔 Turn on notifications'}</button>
-        </div>
+        <div class="section-actions"><button class="btn sm ${pushOn ? '' : 'primary'}" data-push>${pushOn ? '🔔 Notifications on' : '🔔 Turn on notifications'}</button></div>
       </div>
       <div class="todo-tabs">
-        ${['design', 'print', 'general'].map((l) => `<button class="todo-tab ${tab === l ? 'on' : ''}" data-tt="${l}">
-          <span class="ic">${LISTS[l].icon}</span><span class="tx"><b>${LISTS[l].en}</b><small>${l === 'general' ? 'anyone' : cap(roles[l])}</small></span>${T && count(l) ? `<span class="n">${count(l)}</span>` : ''}</button>`).join('')}
-        <button class="todo-tab done ${tab === 'done' ? 'on' : ''}" data-tt="done"><span class="ic">✓</span><span class="tx"><b>Done</b><small>last ones</small></span></button>
+        ${['order', 'design', 'print', 'general'].map((l) => {
+          const n = done ? null : of(l).length;
+          return `<button class="todo-tab ${tab === l ? 'on' : ''} ${l === 'order' ? 'main' : ''}" data-tt="${l}"><span class="ic">${LISTS[l].icon}</span>
+            <span class="tx"><b>${LISTS[l].en}</b><small>${LISTS[l].who || cap(roles[l])}</small></span>${n ? `<span class="n num">${n}</span>` : ''}</button>`;
+        }).join('')}
+        <button class="todo-tab done ${done ? 'on' : ''}" data-tt="done"><span class="ic">✓</span><span class="tx"><b>Done</b><small>History</small></span></button>
       </div>
-      ${tab !== 'done' ? `<div class="actions-grid todo-actions">
-        <button class="btn wa" data-wa-list ${tasks && tasks.length ? '' : 'disabled'}>${icon.wa}Send list on WhatsApp</button>
+      <div class="todo-filters">
+        <input class="input" id="todo-q" placeholder="Search client, order no., product…" value="${esc(S.todoQ)}" autocomplete="off" />
+        <div class="chips filter-seg">${typeChips.map(([k, l]) => `<button class="chip ${S.todoType === k ? 'on' : ''}" data-ty="${k}">${l}</button>`).join('')}</div>
+      </div>
+      ${done ? '' : `<div class="actions-grid todo-actions">
+        <button class="btn wa" data-wa-list ${tasks.length ? '' : 'disabled'}>${icon.wa}Send this list on WhatsApp</button>
         <button class="btn" data-add-task>${icon.plus}Add task</button>
-      </div>` : ''}
-      <div class="todo-list" id="todo-list">${tasks ? '' : '<div class="skel"></div>'.repeat(3)}</div>`;
-    $$('[data-tt]').forEach((b) => (b.onclick = async () => {
-      S.todoTab = b.dataset.tt;
-      if (b.dataset.tt === 'done') { S.todo = null; renderTodo(); await loadTodo(true).catch((e) => toast('err', e.message)); }
-      else if (T && T.done) { S.todo = null; renderTodo(); await loadTodo().catch((e) => toast('err', e.message)); }
-      if (S.view === 'todo') renderTodo();
-    }));
+      </div>`}
+      <div class="todo-list" id="todo-list"></div>`;
+    $$('[data-tt]').forEach((b) => (b.onclick = () => { S.todoTab = b.dataset.tt; renderTodo(); }));
+    $$('[data-ty]').forEach((b) => (b.onclick = () => { S.todoType = b.dataset.ty; renderTodo(); }));
+    let qt;
+    $('#todo-q').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { S.todoQ = e.target.value; paintTodo(sortTasks(todoFilter(done ? T.tasks : of(tab))), tab); }, 150); };
     $('[data-push]').onclick = (e) => (pushOn ? openPushSheet() : enablePush(e.currentTarget));
-    const wa = $('[data-wa-list]'); if (wa) wa.onclick = () => sendTodoList(tab, tasks);
-    const add = $('[data-add-task]'); if (add) add.onclick = () => openTaskEditor(null, tab);
-    if (!T) { loadTodo(tab === 'done').then(() => { if (S.view === 'todo') renderTodo(); }).catch((e) => toast('err', e.message)); return; }
-    if (tab !== 'done') T.done = false; else T.done = true;
+    const wa = $('[data-wa-list]'); if (wa) wa.onclick = () => sendTodoList(tab, sortTasks(todoFilter(of(tab))));
+    const add = $('[data-add-task]'); if (add) add.onclick = () => openTaskEditor(null, tab === 'order' ? 'general' : tab);
     paintTodo(tasks, tab);
+  }
+
+  // where an order is: Design → Print → Delivered
+  function stageBar(t) {
+    const s = t.source && t.source.stages;
+    if (!s) return '';
+    const step = (key, todo, did) => {
+      const st = s[key];
+      return st ? `<span class="stg ${st}">${st === 'done' ? `✓ ${did}` : todo}</span>` : '';
+    };
+    const ws = t.source_type === 'ws' && t.source.status === 'pending' ? '<span class="stg wait">⏳ To accept</span>' : '';
+    return `<div class="stages">${ws}${step('design', '🎨 Design to do', 'Designed')}${step('print', '🖨️ To print', 'Printed')}${step('order', '📦 To deliver', 'Delivered')}</div>`;
   }
 
   function paintTodo(tasks, tab) {
     const el = $('#todo-list');
+    if (!el) return;
+    const done = tab === 'done';
     if (!tasks.length) {
-      el.innerHTML = `<div class="empty"><div class="em-ic">${tab === 'done' ? '✓' : LISTS[tab].icon}</div><b>${tab === 'done' ? 'Nothing done yet' : 'All clear 🎉'}</b>${tab === 'design' ? 'Sales and wholesale orders with a print show up here by themselves.' : tab === 'print' ? 'When a design is done it moves here for DTF printing.' : tab === 'done' ? '' : 'Tap “Add task” for anything else.'}</div>`;
+      el.innerHTML = `<div class="empty"><div class="em-ic">${done ? '✓' : LISTS[tab].icon}</div><b>${S.todoQ || S.todoType !== 'all' ? 'Nothing matches' : done ? 'Nothing done yet' : 'All clear 🎉'}</b>${S.todoQ || S.todoType !== 'all' ? 'Try another filter.' : done ? '' : LISTS[tab].empty}</div>`;
       return;
     }
-    const today = new Date().toISOString().slice(0, 10);
     el.innerHTML = tasks.map((t) => {
-      const late = t.due_date && t.due_date < today && t.status === 'open';
+      const late = isLate(t);
+      const src = t.source;
       const pcs = t.items.reduce((a, i) => a + i.qty, 0);
-      return `<div class="task ${t.status === 'done' ? 'is-done' : ''} ${late ? 'late' : ''}" data-tid="${t.id}">
-        <button class="tick" data-tick="${t.id}" aria-label="${t.status === 'done' ? 'Mark as not done' : LISTS[t.list].verb}" title="${LISTS[t.list].verb}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
-        <div class="tk-main" data-open-task="${t.id}">
-          <div class="tk-title">${esc(t.title)}</div>
-          ${t.items.length ? `<div class="items">${t.items.map((i) => `<span class="mini print"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)} · ${i.print === 'front_back' ? 'F+B' : 'F'}</span>`).join('')}</div>`
-    : t.details ? `<div class="tk-details">${esc(t.details)}</div>` : ''}
-          <div class="tk-meta">${t.status === 'done' ? `✓ ${esc(cap(t.done_by))} · ${dateFmt(t.done_at)} · ${LISTS[t.list].en}` : `${t.list === 'general' ? `<span class="pill new">${esc(cap(t.assignee))}</span> ` : ''}${t.due_date ? `<b class="${late ? 'late-tag' : ''}">${late ? 'Late · ' : 'Due '}${esc(t.due_date)}</b> · ` : ''}${pcs ? `${pcs} pcs · ` : ''}${dateFmt(t.created_at)}`}</div>
+      const waitingPrint = t.list === 'order' && src && (src.stages.design === 'open' || src.stages.print === 'open');
+      const kind = t.source_type === 'ws' ? '<span class="kind k-ws">🏬 Wholesale</span>' : t.source_type === 'sale' ? '<span class="kind k-sale">🛍️ Sale</span>' : `<span class="kind k-gen">${LISTS[t.list].icon} ${t.list === 'general' ? 'Task' : LISTS[t.list].en}</span>`;
+      const verb = t.status === 'done' ? 'Undo' : LISTS[t.list].verb;
+      const toAccept = t.status === 'open' && t.list === 'order' && t.source_type === 'ws' && src && src.status === 'pending';
+      return `<article class="task ${t.status === 'done' ? 'is-done' : ''} ${late ? 'late' : ''}" data-tid="${t.id}">
+        <div class="tk-top">
+          ${kind}
+          ${src ? `<span class="tk-no">${esc(src.no)}</span>` : ''}
+          ${src && t.source_type ? (src.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>') : ''}
+          ${src && src.gift ? '<span class="pill gift">🎁</span>' : ''}
+          ${src ? `<b class="tk-total num">${fmt(src.total)}</b>` : ''}
         </div>
-        ${t.source_type ? `<button class="btn sm ghost tk-src" data-src="${t.source_type}:${t.source_id}">${t.source_type === 'sale' ? invNo(t.source_id) : 'WS-' + String(t.source_id).padStart(4, '0')}${icon.chevron}</button>` : ''}
-      </div>`;
+        <div class="tk-main" ${t.source_type ? `data-src="${t.source_type}:${t.source_id}"` : `data-open-task="${t.id}"`}>
+          <div class="tk-title" dir="auto">${esc(src ? src.client : t.title)}</div>
+          ${t.items.length ? `<div class="items">${t.items.map((i) => `<span class="mini ${i.print && i.print !== 'none' ? 'print' : ''}"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)}${i.print === 'front_back' ? ' · F+B' : i.print === 'front' ? ' · F' : ''}</span>`).join('')}</div>`
+    : t.details ? `<div class="tk-details" dir="auto">${esc(t.details)}</div>` : ''}
+          ${stageBar(t)}
+          <div class="tk-meta">${t.status === 'done' ? `✓ ${esc(cap(t.done_by))} · ${ago(t.done_at)}` : [
+            t.list === 'general' || t.list === 'design' || t.list === 'print' ? `<span class="who-chip">${avatar(t.assignee, 'xs')}${esc(cap(t.assignee))}</span>` : '',
+            t.due_date ? `<b class="${late ? 'late-tag' : ''}">${late ? '⚠️ Late · ' : 'Due '}${esc(t.due_date)}</b>` : '',
+            pcs ? `${pcs} pcs` : '', ago(t.created_at)].filter(Boolean).join(' · ')}</div>
+        </div>
+        ${toAccept ? `<button class="tk-tick waiting" data-review="${t.source_id}">⏳ Review &amp; accept this order ›</button>` : `<button class="tk-tick ${t.status === 'done' ? 'undo' : ''} ${waitingPrint && t.status !== 'done' ? 'waiting' : ''}" data-tick="${t.id}">
+          <span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+          <span>${waitingPrint && t.status !== 'done' ? '⏳ Waiting for print' : verb}</span>
+        </button>`}
+      </article>`;
     }).join('');
     $$('[data-tick]', el).forEach((b) => (b.onclick = () => tickTask(+b.dataset.tick, b)));
-    $$('[data-open-task]', el).forEach((b) => (b.onclick = () => { const t = S.todo.tasks.find((x) => x.id === +b.dataset.openTask); if (t && !t.source_type && t.status === 'open') openTaskEditor(t); }));
+    $$('[data-review]', el).forEach((b) => (b.onclick = () => openWsOrder(+b.dataset.review)));
+    $$('[data-open-task]', el).forEach((b) => (b.onclick = () => { const t = S.todo.tasks.find((x) => x.id === +b.dataset.openTask); if (t && t.status === 'open') openTaskEditor(t); }));
     $$('[data-src]', el).forEach((b) => (b.onclick = () => { const [type, id] = b.dataset.src.split(':'); if (type === 'sale') openSaleDetail(+id).catch((e) => toast('err', e.message)); else openWsOrder(+id); }));
   }
 
   async function tickTask(id, btn) {
     const t = S.todo.tasks.find((x) => x.id === id);
     const done = t.status !== 'done';
+    const src = t.source;
+    if (done && t.list === 'order' && src && (src.stages.design === 'open' || src.stages.print === 'open')) {
+      const ok = await confirmSheet(`Hand over ${src.no} now?`, 'Its design or DTF print is not ticked yet. Mark it delivered anyway?', 'Yes, delivered');
+      if (!ok) return;
+    }
     const card = btn.closest('.task');
     busy(btn, async () => {
       try {
         if (done) card.classList.add('ticking');
         const r = await api(`/api/tasks/${id}/done`, { body: { done } });
         S.data.stats.tasks_open = r.counts;
-        await new Promise((res) => setTimeout(res, done ? 380 : 0));
-        await loadTodo(!done);
+        await new Promise((res) => setTimeout(res, done ? 350 : 0));
+        await loadTodo(S.todo.done);
         if (S.view === 'todo') renderShell();
-        const msg = r.created ? `Moved to ${cap(S.todo.roles.print)}’s DTF printing list 🖨️` : done ? t.title : 'Back on the list';
-        undoable(done ? (t.list === 'design' && r.created ? 'Design done ✓' : 'Done ✓') : 'Not done', msg, async () => {
+        const name = src ? `${src.no} · ${src.client}` : t.title;
+        const title = !done ? 'Back on the list' : t.list === 'order' ? 'Delivered 📦' : t.list === 'design' ? 'Design sent to print 🎨' : t.list === 'print' ? 'Printed 🖨️' : 'Done ✓';
+        const text = r.created ? `${name} → ${cap(S.todo.roles.print)}’s DTF list` : name;
+        undoable(title, text, async () => {
           const u = await api(`/api/tasks/${id}/done`, { body: { done: !done } });
           S.data.stats.tasks_open = u.counts;
-          await loadTodo(S.todo && S.todo.done);
+          await loadTodo(S.todo.done);
           if (S.view === 'todo') renderShell();
         });
+        if (t.source_type === 'sale' || t.list === 'order') S.sales = [];
       } catch (e) { card.classList.remove('ticking'); toast('err', 'Could not save', e.message); }
     });
   }
 
   function sendTodoList(tab, tasks) {
     const roles = S.todo.roles;
-    const who = tab === 'general' ? '' : cap(roles[tab]);
+    const who = tab === 'design' || tab === 'print' ? cap(roles[tab]) : '';
     const phone = tab === 'design' ? roles.design_phone : tab === 'print' ? roles.print_phone : '';
+    const filterName = { sale: ' · sales', ws: ' · wholesale', unpaid: ' · not paid', late: ' · late', mine: ' · mine' }[S.todoType] || '';
     const lines = [
-      `📋 Yalla Wear — ${LISTS[tab].en}${who ? ` for ${who}` : ''} (${tasks.length})`,
+      `${LISTS[tab].icon} Yalla Wear — ${LISTS[tab].en}${who ? ` for ${who}` : ''}${filterName} (${tasks.length})`,
       '',
-      ...tasks.flatMap((t, i) => [
-        `${i + 1}. ${t.title.replace(/^(Design|DTF print) · /, '')}${t.due_date ? ` — due ${t.due_date}` : ''}${t.list === 'general' ? ` (${cap(t.assignee)})` : ''}`,
-        ...(t.items.length ? t.items.map((x) => `   • ${x.qty}× ${x.product} ${x.color} ${x.size} — ${x.print === 'front_back' ? 'Front + back' : 'Front'}`) : t.details ? t.details.split('\n').map((d) => `   ${d}`) : []),
-      ]),
+      ...tasks.flatMap((t, i) => {
+        const s = t.source;
+        return [
+          `${i + 1}. ${s ? `${s.no} · ${s.client}${t.source_type === 'ws' ? ' (wholesale)' : ''}` : t.title}${t.due_date ? ` — due ${t.due_date}` : ''}${t.list === 'general' ? ` (${cap(t.assignee)})` : ''}`,
+          ...(t.items.length ? t.items.map((x) => `   • ${x.qty}× ${x.product} ${x.color} ${x.size}${x.print === 'front_back' ? ' — Front + back' : x.print === 'front' ? ' — Front' : ''}`) : t.details ? t.details.split('\n').map((d) => `   ${d}`) : []),
+          ...(tab === 'order' && s ? [`   ${s.paid ? '✅ Paid' : `💰 Not paid · ${fmt(s.total)} ${cur()}`}`] : []),
+        ];
+      }),
       '',
       `Open the list: ${location.origin}/?view=todo`,
     ];
-    const text = lines.join('\n');
-    window.open(`https://wa.me/${phone ? waDigits(phone) : ''}?text=${encodeURIComponent(text)}`, '_blank');
+    window.open(`https://wa.me/${phone ? waDigits(phone) : ''}?text=${encodeURIComponent(lines.join('\n'))}`, '_blank');
   }
 
   function openTaskEditor(t, tab = 'general') {
     const users = S.users || [S.me];
-    const list = t ? t.list : (tab === 'done' ? 'general' : tab);
+    const list = t ? t.list : tab;
     const roles = S.todo.roles;
     const sh = openSheet(`${sheetHead(t ? 'Edit task' : 'New task')}
-      <div class="field"><label>What has to be done</label><input class="input" data-f="title" dir="auto" maxlength="140" value="${esc(t ? t.title : '')}" placeholder="e.g. Design the logo for Lattakia Style" /></div>
+      <div class="field"><label>What has to be done</label><input class="input" data-f="title" dir="auto" maxlength="140" value="${esc(t ? t.title : '')}" placeholder="e.g. Buy more DTF film" /></div>
       <div class="field"><label>Details (optional)</label><textarea class="input" data-f="details" dir="auto" rows="3" maxlength="1000" placeholder="Sizes, colors, where the file is…">${esc(t ? t.details : '')}</textarea></div>
       <div class="field"><label>List</label><div class="seg">${['design', 'print', 'general'].map((l) => `<button class="${list === l ? 'on' : ''}" data-l="${l}">${LISTS[l].icon} ${LISTS[l].en}</button>`).join('')}</div></div>
       <div class="field"><label>Who does it</label><div class="chips" data-who>${users.map((u) => `<button class="chip ${(t ? t.assignee : list === 'general' ? S.me : roles[list]) === u ? 'on' : ''}" data-u="${esc(u)}">${avatar(u, 'sm')}${esc(cap(u))}</button>`).join('')}</div></div>
@@ -2313,8 +2402,8 @@
     try {
       const fresh = await api('/api/state');
       // a new task for me since last check: chime + note (the push notification covers a closed app)
-      const mineBefore = myOpen(), mineNow = (fresh.stats.tasks_open || {})[S.me] || 0;
-      if (mineNow > mineBefore) { chime(); toast('ok', `📋 ${mineNow - mineBefore} new task${mineNow - mineBefore === 1 ? '' : 's'} for you`, 'Tap the ✓ button at the top', 6000); }
+      const mineBefore = myOpen(), mineNow = myOpen(fresh.stats.tasks_open);
+      if (mineNow > mineBefore) { chime(); toast('ok', `📋 ${mineNow - mineBefore} new on your to-do list`, 'Tap the ✓ button at the top', 6000); }
       if (JSON.stringify(fresh.stats.tasks_open) !== JSON.stringify(S.data.stats.tasks_open)) S.todo = null;
       const changed = fresh.stock.filter((r) => {
         const old = S.data.stock.find((o) => o.color_id === r.color_id && o.size_id === r.size_id);

@@ -141,6 +141,9 @@ addColumn('sales', 'gift_hide_prices', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('sales', 'gift_wrap', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('sales', 'updated_at', 'TEXT');
 addColumn('sale_items', 'free', 'INTEGER NOT NULL DEFAULT 0');
+// handed over to the client (set from the to-do list or the sale)
+addColumn('sales', 'delivered_at', 'TEXT');
+addColumn('sales', 'delivered_by', 'TEXT');
 // wholesale: a price for shops buying in bulk and the least pieces per order (0 = not sold wholesale)
 addColumn('products', 'wholesale_price', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('products', 'wholesale_min', 'INTEGER NOT NULL DEFAULT 1');
@@ -299,6 +302,7 @@ function buildState() {
       month_sales: month.sales, month_pieces: monthPieces, month_revenue: month.revenue,
       unpaid_count: unpaid.n, unpaid_amount: unpaid.amount, best_seller: best,
       ws_pending: db.prepare("SELECT COUNT(*) n FROM ws_orders WHERE status = 'pending'").get().n,
+      // per person; '' = the whole team (orders to prepare and deliver)
       tasks_open: Object.fromEntries(db.prepare("SELECT assignee, COUNT(*) n FROM tasks WHERE status = 'open' GROUP BY assignee").all().map((r) => [r.assignee, r.n])),
     },
   };
@@ -501,7 +505,7 @@ app.post('/api/sales', auth, (req, res, next) => {
       for (const l of lines) insertSaleLine(saleId, l);
       return saleId;
     })();
-    fire('saleChanged', id, req.user);
+    fire('saleChanged', id, req.user, { isNew: true });
     res.json({ sale: saleWithItems(id), state: buildState() });
   } catch (e) { next(e); }
 });
@@ -614,6 +618,17 @@ app.post('/api/sales/:id/restore', auth, (req, res, next) => {
     fire('saleChanged', id, req.user);
     res.json({ sale: saleWithItems(id), state: buildState() });
   } catch (e) { next(e); }
+});
+
+// handed over to the client (the to-do list does the same when its order task is ticked)
+app.post('/api/sales/:id/delivered', auth, (req, res) => {
+  const id = int(req.params.id);
+  const on = (req.body || {}).delivered !== false;
+  const r = db.prepare('UPDATE sales SET delivered_at = ?, delivered_by = ? WHERE id = ? AND cancelled_at IS NULL')
+    .run(on ? nowISO() : null, on ? req.user : null, id);
+  if (!r.changes) return res.status(404).json({ error: 'Sale not found or cancelled' });
+  fire('saleChanged', id, req.user);
+  res.json({ sale: saleWithItems(id), state: buildState() });
 });
 
 app.post('/api/sales/:id/paid', auth, (req, res) => {
@@ -990,7 +1005,7 @@ ${cancelled ? '<div class="x">This sale was cancelled · <span class="ar">تم �
 
 // ---- wholesale portal (wholesale.js) + to-do lists and phone notifications (tasks.js) ----
 require('./wholesale')({
-  app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard, buildState, fire,
+  app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard, buildState, fire, hooks,
 });
 require('./tasks')({ app, db, auth, HttpError, int, str, nowISO, getSettings, users: Object.keys(USERS), hooks });
 

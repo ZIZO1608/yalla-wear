@@ -24,13 +24,16 @@ The stock and sales tracker for Yalla Wear. You and Zohrab log in from your phon
   - **Instagram** copies the message and opens the DM, so you just paste it. Instagram doesn't let apps pre-fill DMs.
   - **Share PDF / Download** are always there too.
 - **Receipt link.** A branded page where the client can see and download the PDF. Links are long random codes and are hidden from Google.
-- **To do (✓ button at the top).** Two work lists plus one for anything else:
-  - **🎨 Designs (Zaven):** every sale or accepted wholesale order with a print shows up here by itself, with the pieces and print sides.
-  - **🖨️ DTF printing (Zohrab):** ticking "design done" moves the job here and Zohrab's phone gets a notification. Ticking it when printed tells Zaven.
+- **To do (✓ button at the top).**
+  - **📦 Orders (team):** every new sale and wholesale order shows up here by itself, with the client, pieces, total and paid / not paid, and the other phone gets a **🛍️ New order** notification. Tick **Delivered** when it's handed over: the sale is marked delivered (or the wholesale order moves to Delivered). A wholesale order waiting for you shows **Review & accept** instead.
+  - **🎨 Designs (Zaven):** orders with a print also land here. Ticking **Design sent to print** moves the job to Zohrab and his phone gets a notification.
+  - **🖨️ DTF printing (Zohrab):** ticking **Printed** tells the others it's ready to hand over.
+  - Each order card shows where it is: Design to do → To print → To deliver. Late ones are marked red.
+  - **Filters:** All · Sales · Wholesale · Not paid · Late · Mine, plus a search box. **Done** shows the history.
   - **Other:** tasks you add by hand for either of you, with a due date.
-  - **Send list on WhatsApp** sends the whole list as a message (set each person's WhatsApp in Settings → Team). Who designs and who prints can be changed there too.
-  - Editing or cancelling a sale or order updates or removes its task. Every tick has Undo.
-- **Notifications with sound.** Settings → **🔔 Notifications on this phone** (or the button on the To do page). You get one for new tasks, designs ready for printing, printed jobs, and new or cancelled wholesale orders, even when the app is closed.
+  - **Send this list on WhatsApp** sends the list you're looking at (with the filter). Set each person's WhatsApp in Settings → Team, where you can also change who designs and who prints.
+  - Editing or cancelling a sale or order updates or removes its tasks. Every tick has Undo. A sale can also be marked delivered from the sale itself.
+- **Notifications with sound.** Settings → **🔔 Notifications on this phone** (or the button on the To do page). You get one for new orders, new tasks, designs ready for printing, printed jobs, deliveries, and new or cancelled wholesale orders, even when the app is closed.
   - **iPhone:** needs iOS 16.4+, and the app must be added to the Home Screen first (Safari → Share → Add to Home Screen). Open it from the icon, then turn on notifications and tap Allow. They use the normal iPhone notification sound (Silent mode and Focus mute them). When the app is open it also plays a short chime.
   - Works on Android (Chrome) and computers too. Needs HTTPS (it's on with your Coolify domain).
 - **Sales log.** Search by client, @instagram or product, filter by not paid or cancelled, mark as paid, or cancel (the stock goes back). You can export to Excel (CSV).

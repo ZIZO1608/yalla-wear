@@ -786,40 +786,58 @@ table.stock.order-grid { width: max-content; min-width: 100%; }
 .todo-btn { position: relative; }
 .todo-btn.on { background: var(--mint-soft); color: var(--mint); border-color: rgba(192, 219, 198, .4); }
 .todo-btn .badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--bg); }
-.todo-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
-.todo-tab { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text); text-align: left; min-width: 0; }
+.todo-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.todo-tab { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text); text-align: left; min-width: 0; transition: border-color .15s, background .15s, transform .1s; }
+.todo-tab:active { transform: scale(.97); }
 .todo-tab .ic { font-size: 20px; flex: none; }
 .todo-tab .tx { display: flex; flex-direction: column; min-width: 0; }
 .todo-tab b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.todo-tab small { font-size: 11px; color: var(--muted); }
-.todo-tab .n { position: absolute; top: -7px; right: -5px; min-width: 20px; height: 20px; border-radius: 10px; background: var(--mint); color: var(--mint-ink); font-size: 12px; font-weight: 800; display: grid; place-items: center; padding: 0 6px; }
+.todo-tab small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.todo-tab .n { position: absolute; top: -7px; right: -5px; min-width: 22px; height: 22px; border-radius: 11px; background: var(--mint); color: var(--mint-ink); font-size: 12px; font-weight: 800; display: grid; place-items: center; padding: 0 6px; box-shadow: 0 0 0 2px var(--bg); }
+.todo-tab.main .n { background: var(--amber); }
 .todo-tab.on { border-color: var(--mint); background: var(--mint-soft); }
 .todo-tab.done .ic { color: var(--mint); font-weight: 800; }
+.todo-filters { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.todo-filters .filter-seg { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.todo-filters .filter-seg::-webkit-scrollbar { display: none; }
+.todo-filters .chip { white-space: nowrap; padding: 7px 12px; font-size: 13px; }
 .todo-actions { margin: 0 0 14px; }
 .todo-list { display: flex; flex-direction: column; gap: 10px; }
-.task { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--line); transition: opacity .3s, transform .3s; }
-.task.late { border-color: rgba(255, 92, 108, .45); }
-.task .tick { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--line-2); background: var(--bg-2); color: transparent; display: grid; place-items: center; transition: background .15s, border-color .15s, color .15s, transform .1s; }
-.task .tick svg { width: 18px; height: 18px; }
-.task .tick:active { transform: scale(.9); }
-.task.is-done .tick, .task.ticking .tick { background: var(--mint); border-color: var(--mint); color: var(--mint-ink); }
-.task.ticking { opacity: .45; transform: translateX(12px); }
-.task.is-done .tk-title { text-decoration: line-through; color: var(--muted); }
-.tk-main { flex: 1; min-width: 0; cursor: pointer; }
-.tk-title { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
+.task { position: relative; padding: 14px 14px 12px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--line); transition: opacity .3s, transform .3s, border-color .15s; }
+.task.late { border-color: rgba(255, 92, 108, .5); box-shadow: inset 3px 0 0 var(--red); }
+.task.ticking { opacity: .4; transform: translateX(14px); }
+.tk-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tk-top .kind { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; padding: 3px 8px; border-radius: 999px; background: rgba(255, 255, 255, .06); color: var(--muted); }
+.tk-top .kind.k-ws { background: rgba(124, 147, 255, .16); color: #A9B6FF; }
+.tk-top .kind.k-sale { background: var(--mint-soft); color: var(--mint); }
+.tk-no { font-family: var(--display); font-size: 18px; letter-spacing: .5px; color: var(--muted); }
+.tk-total { margin-left: auto; font-family: var(--display); font-size: 22px; letter-spacing: .5px; }
+.tk-main { cursor: pointer; margin-top: 6px; min-width: 0; }
+.tk-title { font-weight: 700; font-size: 17px; overflow-wrap: anywhere; }
+.task.is-done .tk-title { color: var(--muted); }
 .tk-main .items { margin-top: 8px; }
 .tk-details { font-size: 13px; color: var(--muted); margin-top: 4px; white-space: pre-line; }
-.tk-meta { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.stages { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.stg { font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--muted); }
+.stg.open { border-color: rgba(255, 194, 75, .5); color: var(--amber); background: var(--amber-soft); }
+.stg.done { border-color: rgba(192, 219, 198, .45); color: var(--mint); background: var(--mint-soft); }
+.stg.wait { border-color: rgba(255, 194, 75, .5); color: var(--amber); }
+.tk-meta { font-size: 12px; color: var(--muted); margin-top: 10px; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
 .tk-meta .late-tag { color: var(--red); }
-.tk-src { flex: none; font-family: var(--display); font-size: 16px; letter-spacing: .5px; padding: 6px 6px 6px 10px; }
-.tk-src svg { width: 14px; height: 14px; }
+.who-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--text); font-weight: 600; }
+.avatar.xs { width: 20px; height: 20px; border-radius: 7px; font-size: 11px; }
+.tk-tick { width: 100%; margin-top: 12px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 11px; border-radius: 12px; border: 1px solid rgba(192, 219, 198, .45); background: var(--mint-soft); color: var(--mint); font-weight: 700; font-size: 14px; transition: transform .1s, background .15s; }
+.tk-tick:active { transform: scale(.98); }
+.tk-tick .ck { width: 22px; height: 22px; border-radius: 50%; border: 2px solid currentColor; display: grid; place-items: center; }
+.tk-tick .ck svg { width: 13px; height: 13px; opacity: 0; transition: opacity .15s; }
+.task.ticking .tk-tick, .tk-tick.undo { background: transparent; color: var(--muted); border-color: var(--line-2); }
+.task.ticking .tk-tick .ck svg, .tk-tick.undo .ck svg { opacity: 1; }
+.tk-tick.waiting { background: transparent; color: var(--amber); border-color: rgba(255, 194, 75, .45); }
 .ios-steps { padding-left: 20px; line-height: 1.6; margin: 0 0 14px; }
 .ios-steps li { margin-bottom: 6px; }
 .share-ic { display: inline-block; border: 1px solid var(--line-2); border-radius: 6px; padding: 0 5px; font-size: 12px; }
-@media (max-width: 560px) {
-  .todo-tabs { grid-template-columns: 1fr 1fr; }
-}
-@media (max-width: 460px) {
-  .tk-src { position: absolute; right: 12px; top: 12px; }
-  .task { position: relative; padding-right: 92px; }
+@media (hover: hover) { .tk-tick:hover { filter: brightness(1.12); } .task:hover { border-color: var(--line-2); } }
+@media (max-width: 640px) {
+  .todo-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .todo-tab.main { grid-column: 1 / -1; }
 }

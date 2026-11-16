@@ -10,7 +10,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 module.exports = function wholesale(ctx) {
-  const { app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard, fire } = ctx;
+  const { app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard, fire, hooks } = ctx;
 
   db.exec(`
   CREATE TABLE IF NOT EXISTS wholesalers (
@@ -324,20 +324,24 @@ module.exports = function wholesale(ctx) {
   });
 
   // move an order to another status; stock follows (taken when accepted, back when rejected/cancelled)
+  function setStatus(id, status, user, note = '') {
+    if (!STATUSES.includes(status)) throw new HttpError(400, 'Unknown status');
+    db.transaction(() => {
+      const o = db.prepare('SELECT * FROM ws_orders WHERE id = ?').get(id);
+      if (!o) throw new HttpError(404, 'Order not found');
+      if (o.status === status) return;
+      if (ACTIVE.includes(status) && !o.stock_taken) takeStock(id, user);
+      if (!ACTIVE.includes(status) && o.stock_taken) releaseStock(id, user, STATUS_LABEL[status].toLowerCase());
+      db.prepare('UPDATE ws_orders SET status = ?, updated_at = ? WHERE id = ?').run(status, nowISO(), id);
+      event(id, user, 'status', status, note);
+    })();
+  }
+  // the to-do list uses it too: ticking "delivered" on a wholesale order moves the order
+  hooks.wsSetStatus = setStatus;
   app.post('/api/ws-orders/:id/status', auth, (req, res, next) => {
     try {
       const id = int(req.params.id);
-      const status = String((req.body || {}).status || '');
-      if (!STATUSES.includes(status)) throw new HttpError(400, 'Unknown status');
-      db.transaction(() => {
-        const o = db.prepare('SELECT * FROM ws_orders WHERE id = ?').get(id);
-        if (!o) throw new HttpError(404, 'Order not found');
-        if (o.status === status) return;
-        if (ACTIVE.includes(status) && !o.stock_taken) takeStock(id, req.user);
-        if (!ACTIVE.includes(status) && o.stock_taken) releaseStock(id, req.user, STATUS_LABEL[status].toLowerCase());
-        db.prepare('UPDATE ws_orders SET status = ?, updated_at = ? WHERE id = ?').run(status, nowISO(), id);
-        event(id, req.user, 'status', status, (req.body || {}).note || '');
-      })();
+      setStatus(id, String((req.body || {}).status || ''), req.user, (req.body || {}).note || '');
       fire('wsOrderChanged', id, req.user);
       res.json({ order: orderFull(id), state: ctx.buildState() });
     } catch (e) { next(e); }
