@@ -167,6 +167,8 @@ function saveProduct(spec, productId) {
   const printable = spec.printable ? 1 : 0;
   const pf = Math.max(0, int(spec.print_front));
   const pfb = Math.max(0, int(spec.print_front_back));
+  const wsPrice = Math.max(0, int(spec.wholesale_price));
+  const wsMin = Math.max(1, int(spec.wholesale_min, 1));
   const colors = Array.isArray(spec.colors) ? spec.colors : [];
   const sizes = Array.isArray(spec.sizes) ? spec.sizes : [];
   const dup = (arr) => { const seen = new Set(); for (const a of arr) { const k = a.toLowerCase(); if (seen.has(k)) return a; seen.add(k); } return null; };
@@ -183,10 +185,12 @@ function saveProduct(spec, productId) {
       const r = db.prepare(`UPDATE products SET name=?, name_ar=?, price=?, printable=?, print_front=?, print_front_back=? WHERE id=?`)
         .run(name, String(spec.name_ar || '').trim().slice(0, 40), price, printable, pf, pfb, id);
       if (!r.changes) throw new HttpError(404, 'Product not found');
+      if (spec.wholesale_price != null) db.prepare('UPDATE products SET wholesale_price=?, wholesale_min=? WHERE id=?').run(wsPrice, wsMin, id);
     } else {
       const sort = db.prepare('SELECT COALESCE(MAX(sort),0)+1 n FROM products').get().n;
       id = db.prepare(`INSERT INTO products (name,name_ar,price,printable,print_front,print_front_back,sort,created_at)
         VALUES (?,?,?,?,?,?,?,?)`).run(name, String(spec.name_ar || '').trim().slice(0, 40), price, printable, pf, pfb, sort, nowISO()).lastInsertRowid;
+      db.prepare('UPDATE products SET wholesale_price=?, wholesale_min=? WHERE id=?').run(wsPrice, wsMin, id);
     }
     // colors: update by id, revive by name, else insert; anything left out gets archived (history stays intact)
     const existingC = db.prepare('SELECT * FROM colors WHERE product_id = ?').all(id);
@@ -294,6 +298,7 @@ function buildState() {
       in_stock: db.prepare(`SELECT COALESCE(SUM(st.qty),0) n ${ACTIVE_STOCK}`).get().n,
       month_sales: month.sales, month_pieces: monthPieces, month_revenue: month.revenue,
       unpaid_count: unpaid.n, unpaid_amount: unpaid.amount, best_seller: best,
+      ws_pending: db.prepare("SELECT COUNT(*) n FROM ws_orders WHERE status = 'pending'").get().n,
     },
   };
 }
@@ -304,6 +309,7 @@ app.disable('x-powered-by');
 // Coolify's Traefik proxy sits on the private Docker network; only trust forwarded headers from there.
 app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.use('/api/sales/:id/receipt', express.json({ limit: '12mb' }));
+app.use('/api/ws-orders/:id/invoice', express.json({ limit: '12mb' }));
 app.use(express.json({ limit: '3mb' }));
 app.use(cookieParser());
 
@@ -316,29 +322,37 @@ function auth(req, res, next) {
   next();
 }
 
-// Brute-force guard: 8 wrong tries per IP per 15 minutes.
+// Brute-force guard: 8 wrong tries per IP per 15 minutes (the wholesale login has its own count).
 const loginFails = new Map();
 const LOGIN_WINDOW = 15 * 60 * 1000;
+const loginGuard = {
+  blocked(key) {
+    const rec = loginFails.get(key), now = Date.now();
+    if (rec && now - rec.first < LOGIN_WINDOW && rec.count >= 8) return `Too many wrong tries. Try again in ${Math.ceil((rec.first + LOGIN_WINDOW - now) / 60000)} min.`;
+    return null;
+  },
+  fail(key) {
+    const rec = loginFails.get(key), now = Date.now();
+    const r = rec && now - rec.first < LOGIN_WINDOW ? rec : { first: now, count: 0 };
+    r.count += 1; loginFails.set(key, r);
+    if (loginFails.size > 5000) loginFails.clear();
+  },
+  ok(key) { loginFails.delete(key); },
+};
 app.post('/api/login', (req, res) => {
   const ip = req.ip || 'unknown';
-  const now = Date.now();
-  const rec = loginFails.get(ip);
-  if (rec && now - rec.first < LOGIN_WINDOW && rec.count >= 8) {
-    const mins = Math.ceil((rec.first + LOGIN_WINDOW - now) / 60000);
-    return res.status(429).json({ error: `Too many wrong tries. Try again in ${mins} min.` });
-  }
+  const blocked = loginGuard.blocked(ip);
+  if (blocked) return res.status(429).json({ error: blocked });
   const username = String(req.body.username || '').trim().toLowerCase();
   const password = String(req.body.password || '');
   const expected = USERS[username];
   const want = Buffer.from(expected || ''), got = Buffer.from(password);
   const ok = !!expected && want.length === got.length && crypto.timingSafeEqual(want, got);
   if (!ok) {
-    const r = rec && now - rec.first < LOGIN_WINDOW ? rec : { first: now, count: 0 };
-    r.count += 1; loginFails.set(ip, r);
-    if (loginFails.size > 5000) loginFails.clear();
+    loginGuard.fail(ip);
     return res.status(401).json({ error: 'Wrong username or password' });
   }
-  loginFails.delete(ip);
+  loginGuard.ok(ip);
   const token = crypto.randomBytes(32).toString('hex');
   db.prepare('INSERT INTO sessions (token, username, expires_at) VALUES (?,?,?)').run(token, username, Date.now() + SESSION_DAYS * 864e5);
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
@@ -801,7 +815,7 @@ app.get('/api/export/clients.csv', auth, (req, res) => {
 app.put('/api/settings', auth, (req, res, next) => {
   try {
     const numeric = ['low_threshold', 'high_threshold', 'gift_wrap_price'];
-    const text = ['currency', 'shop_phone', 'shop_instagram', 'receipt_note', 'logo'];
+    const text = ['currency', 'shop_phone', 'shop_instagram', 'receipt_note', 'logo', 'ws_welcome', 'ws_show_stock'];
     const up = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
     db.transaction(() => {
       for (const k of numeric) if (req.body[k] != null) {
@@ -812,7 +826,7 @@ app.put('/api/settings', auth, (req, res, next) => {
       for (const k of text) if (req.body[k] != null) {
         const v = String(req.body[k]);
         if (k === 'logo' && v && !/^data:image\/(png|jpeg|webp);base64,/.test(v)) throw new HttpError(400, 'Logo must be an image');
-        up.run(k === 'logo' ? v : v.slice(0, 120), k);
+        up.run(k === 'logo' ? v : v.slice(0, k === 'ws_welcome' ? 400 : 120), k);
       }
     })();
     res.json({ state: buildState() });
@@ -964,6 +978,11 @@ ${cancelled ? '<div class="x">This sale was cancelled · <span class="ar">تم �
 <a class="btn" href="/r/${req.params.token}/receipt.pdf?v=${v}" download="YallaWear-${sale.invoice_no}.pdf">Download PDF · <span class="ar">تحميل الإيصال</span></a>
 <div class="f"><img src="/brand/tagline.png" alt="Style That Moves You!">${contact}</div>
 </div></body></html>`);
+});
+
+// ---- wholesale portal (wholesale.js) ----
+require('./wholesale')({
+  app, db, auth, HttpError, int, str, nowISO, liveLine, printPriceFor, cleanPrint, cleanInstagram, getSettings, RECEIPTS_DIR, loginGuard, buildState,
 });
 
 app.get('/healthz', (req, res) => { db.prepare('SELECT 1').get(); res.json({ ok: true }); });

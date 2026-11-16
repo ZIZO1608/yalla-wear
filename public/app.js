@@ -85,6 +85,7 @@
     undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>',
     chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+    store: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1.5-5h15L21 9"/><path d="M3 9h18v2a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0z"/><path d="M5 13v8h14v-8M10 21v-5h4v5"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
   };
 
@@ -292,6 +293,7 @@
         <button class="tab tab-sell" id="btn-sell">${icon.plus}<span class="lbl">New sale</span></button>
         <button class="tab ${S.view === 'sales' ? 'active' : ''}" data-view="sales">${icon.receipt}<span class="lbl">Sales</span></button>
         <button class="tab ${S.view === 'clients' ? 'active' : ''}" data-view="clients">${icon.users}<span class="lbl">Clients</span></button>
+        <button class="tab ${S.view === 'wholesale' ? 'active' : ''}" data-view="wholesale" aria-label="Wholesale">${icon.store}<span class="lbl">Wholesale</span>${S.data.stats.ws_pending ? `<span class="badge">${S.data.stats.ws_pending}</span>` : ''}</button>
       </nav>`;
     $$('[data-view]').forEach((b) => (b.onclick = () => {
       if (S.view !== b.dataset.view) { S.enter = true; window.scrollTo(0, 0); }
@@ -300,7 +302,7 @@
     $('#btn-sell').onclick = () => openNewSale();
     $('#btn-settings').onclick = openSettings;
     $('#btn-logout').onclick = async () => { await api('/api/logout', { body: {} }).catch(() => {}); S.me = null; renderLogin(); };
-    if (S.view === 'stock') renderStock(); else if (S.view === 'clients') renderClients(); else renderSales();
+    if (S.view === 'stock') renderStock(); else if (S.view === 'clients') renderClients(); else if (S.view === 'wholesale') renderWholesale(); else renderSales();
     if (S.enter) { S.enter = false; $('#view').classList.add('enter'); countUp($('#view')); }
   }
 
@@ -440,7 +442,8 @@
       name: p.name, name_ar: p.name_ar, price: p.price, printable: !!p.printable, print_front: p.print_front, print_front_back: p.print_front_back,
       colors: colorsOf(pid).map((c) => ({ id: c.id, name: c.name, name_ar: c.name_ar, hex: c.hex })),
       sizes: sizesOf(pid).map((s) => ({ id: s.id, name: s.name })),
-    } : { name: '', name_ar: '', price: '', printable: true, print_front: 30000, print_front_back: 50000, colors: [], sizes: [] };
+      wholesale_price: p.wholesale_price || '', wholesale_min: p.wholesale_min || 1,
+    } : { name: '', name_ar: '', price: '', printable: true, print_front: 30000, print_front_back: 50000, wholesale_price: '', wholesale_min: 1, colors: [], sizes: [] };
 
     const sh = openSheet(`${sheetHead(p ? 'Edit product' : 'New product')}
       <div class="row stack-sm">
@@ -448,6 +451,10 @@
         <div class="field"><label>Arabic name (receipt)</label><input class="input ar" dir="rtl" data-f="name_ar" placeholder="مثلاً تيشيرت" value="${esc(E.name_ar)}" /></div>
       </div>
       <div class="field"><label>Price per piece (${esc(cur())})</label><input class="input num" type="number" min="0" inputmode="numeric" data-f="price" placeholder="e.g. 90000" value="${esc(E.price)}" /></div>
+      <div class="row">
+        <div class="field"><label>Wholesale price (empty = not sold wholesale)</label><input class="input num" type="number" min="0" inputmode="numeric" data-f="wholesale_price" placeholder="e.g. 90000" value="${esc(E.wholesale_price)}" /></div>
+        <div class="field" style="flex:0 0 120px"><label>Least pieces</label><input class="input num" type="number" min="1" inputmode="numeric" data-f="wholesale_min" value="${esc(E.wholesale_min)}" /></div>
+      </div>
       <label class="switch" style="margin-bottom:12px"><span>Can be printed on</span><input type="checkbox" data-f="printable" ${E.printable ? 'checked' : ''} /></label>
       <div class="row" data-print-row ${E.printable ? '' : 'hidden'}>
         <div class="field"><label>Front print +</label><input class="input num" type="number" min="0" inputmode="numeric" data-f="print_front" value="${esc(E.print_front)}" /></div>
@@ -542,7 +549,8 @@
           if (!ok) return;
         }
       }
-      const body = { ...E, price: Number(E.price) || 0, print_front: Number(E.print_front) || 0, print_front_back: Number(E.print_front_back) || 0 };
+      const body = { ...E, price: Number(E.price) || 0, print_front: Number(E.print_front) || 0, print_front_back: Number(E.print_front_back) || 0,
+        wholesale_price: Number(E.wholesale_price) || 0, wholesale_min: Math.max(1, Number(E.wholesale_min) || 1) };
       e.target.disabled = true;
       try {
         const r = p ? await api(`/api/products/${pid}`, { method: 'PUT', body }) : await api('/api/products', { body });
@@ -620,7 +628,7 @@
       const why = { sale: 'Sold', cancel: 'Sale cancelled — back to stock', restock: 'Restock', adjust: 'Count fixed', opening: 'Opening stock' };
       $('[data-list]', sh).innerHTML = movements.length ? movements.map((m) => `
         <div class="mv"><i class="sw" style="background:${esc(m.hex)}"></i>
-          <div class="what">${multi() ? esc(m.product) + ' ' : ''}${esc(m.color)} ${esc(m.size)} — ${esc(why[m.reason])}${m.sale_id ? ` <span class="muted">${invNo(m.sale_id)}</span>` : ''}
+          <div class="what">${multi() ? esc(m.product) + ' ' : ''}${esc(m.color)} ${esc(m.size)} — ${m.ws_order_id ? (m.delta < 0 ? 'Wholesale order' : 'Wholesale — back to stock') : esc(why[m.reason])}${m.sale_id ? ` <span class="muted">${invNo(m.sale_id)}</span>` : ''}
             <small>${dateFmt(m.created_at)} · ${esc(m.created_by)}${m.note && m.reason !== 'opening' ? ' · ' + esc(m.note) : ''}</small></div>
           <div class="d num ${m.delta > 0 ? 'plus' : 'minus'}">${m.delta > 0 ? '+' : ''}${m.delta}</div></div>`).join('') : '<p class="muted">No movements yet.</p>';
     } catch (e) { $('[data-list]', sh).innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
@@ -1335,6 +1343,446 @@
     return { refresh: paint };
   }
 
+  // ---------- WHOLESALE (admin side) ----------
+  // Shops with a login order on /wholesale. Here you see their orders, accept/reject them, move them along,
+  // edit anything, mark paid, and the invoice they download is remade after every change.
+  const WS_STATUS = {
+    pending: { en: 'Pending', ar: 'بالانتظار', cls: 'unpaid' },
+    accepted: { en: 'Accepted', ar: 'مقبول', cls: 'paid' },
+    production: { en: 'In production', ar: 'قيد التصنيع', cls: 'paid' },
+    ready: { en: 'Ready', ar: 'جاهز', cls: 'paid' },
+    delivered: { en: 'Delivered', ar: 'تم التسليم', cls: 'done' },
+    rejected: { en: 'Rejected', ar: 'مرفوض', cls: 'cancelled' },
+    cancelled: { en: 'Cancelled', ar: 'ملغي', cls: 'cancelled' },
+  };
+  const WS_FLOW = ['pending', 'accepted', 'production', 'ready', 'delivered'];
+  const WS_ACTIVE = ['accepted', 'production', 'ready', 'delivered'];
+  const wsPill = (st) => `<span class="pill ws-${st} ${WS_STATUS[st].cls}">${WS_STATUS[st].en}</span>`;
+  const portalLink = () => `${location.origin}/wholesale`;
+  Object.assign(S, { ws: null, wsTab: 'orders', wsFilter: 'open', wholesalers: null });
+
+  async function loadWsOrders() {
+    const r = await api(`/api/ws-orders?status=${encodeURIComponent(S.wsFilter)}`);
+    S.ws = r;
+    return r;
+  }
+  async function loadWholesalers() {
+    const r = await api('/api/wholesalers');
+    S.wholesalers = r.wholesalers;
+    return r.wholesalers;
+  }
+
+  function renderWholesale() {
+    const st = S.ws ? S.ws.stats : null;
+    const k = (label, val, foot, cls = '', count = val) => `<div class="kpi ${cls}"><div class="kpi-label">${label}</div><div class="kpi-value num"><span data-count="${count}">${val == null ? '—' : fmt(val)}</span></div><div class="kpi-foot">${foot}</div></div>`;
+    $('#view').innerHTML = `
+      <section class="kpis">
+        ${k('To review', st && st.pending, 'new orders waiting', st && st.pending ? 'warn' : 'accent')}
+        ${k('In work', st && st.in_work, st ? `${st.ready} ready to deliver` : '&nbsp;')}
+        ${k('This month', st && st.month_total, st ? `${st.month_orders} order${st.month_orders === 1 ? '' : 's'} · ${esc(cur())}` : '&nbsp;')}
+        ${k('Not paid', st && st.unpaid_amount, esc(cur()), st && st.unpaid_amount ? 'warn' : '')}
+      </section>
+      <div class="ws-head">
+        <div class="seg ws-seg">
+          <button class="${S.wsTab === 'orders' ? 'on' : ''}" data-wst="orders">Orders</button>
+          <button class="${S.wsTab === 'shops' ? 'on' : ''}" data-wst="shops">Wholesalers${st ? ` <small>${st.wholesalers}</small>` : ''}</button>
+        </div>
+        <div class="section-actions">
+          <button class="btn sm" data-portal>${icon.share}Portal link</button>
+          <button class="btn sm primary" data-ws-new>${icon.plus}${S.wsTab === 'orders' ? 'New order' : 'Add wholesaler'}</button>
+        </div>
+      </div>
+      ${S.wsTab === 'orders' ? `<div class="toolbar"><div class="filter-seg chips ws-filters">
+        ${[['open', 'Open'], ['pending', 'To review'], ['production', 'In production'], ['ready', 'Ready'], ['delivered', 'Delivered'], ['unpaid', 'Not paid'], ['closed', 'Rejected']]
+          .map(([key, l]) => `<button class="chip ${S.wsFilter === key ? 'on' : ''}" data-wsf="${key}">${l}</button>`).join('')}
+      </div></div>` : ''}
+      <div class="sales-list" id="ws-list">${'<div class="skel"></div>'.repeat(3)}</div>`;
+    $$('[data-wst]').forEach((b) => (b.onclick = () => { S.wsTab = b.dataset.wst; renderWholesale(); }));
+    $$('[data-wsf]').forEach((b) => (b.onclick = () => { S.wsFilter = b.dataset.wsf; $$('[data-wsf]').forEach((x) => x.classList.toggle('on', x === b)); loadWsOrders().then(paintWs).catch((e) => toast('err', e.message)); }));
+    $('[data-portal]').onclick = () => { copyText(portalLink()); toast('ok', 'Portal link copied 📋', portalLink()); };
+    $('[data-ws-new]').onclick = () => (S.wsTab === 'orders' ? newWsOrder() : openWholesalerEditor(null, (w) => openWholesaler(w.id)));
+    const first = !S.ws;
+    Promise.all([loadWsOrders(), loadWholesalers()]).then(() => {
+      if (S.view !== 'wholesale') return;
+      if (first) { renderWholesale(); countUp($('#view')); } else paintWs();
+    }).catch((e) => toast('err', e.message));
+    if (S.ws) paintWs();
+  }
+
+  function paintWs() {
+    const el = $('#ws-list');
+    if (!el) return;
+    if (S.wsTab === 'shops') {
+      const list = S.wholesalers || [];
+      el.innerHTML = list.length ? list.map((w) => `<button class="client" data-wid="${w.id}">${avatar(w.business_name)}
+        <div class="main"><div class="nm" dir="auto">${esc(w.business_name)}</div><div class="ct">${[w.contact_name, w.city].filter(Boolean).map(esc).join(' · ') || '<span class="muted">—</span>'} · <span class="muted">@${esc(w.username)}</span></div></div>
+        <div class="amt">${w.orders ? `<b class="num">${fmt(w.spent)}</b><span class="muted">${w.orders} order${w.orders === 1 ? '' : 's'} · ${esc(cur())}</span>` : '<span class="pill new">No orders yet</span>'}
+          ${w.pending ? `<span class="pill unpaid">${w.pending} to review</span>` : ''}${w.unpaid_amount ? `<span class="pill unpaid">Owes ${fmt(w.unpaid_amount)}</span>` : ''}</div>
+      </button>`).join('') : `<div class="empty"><div class="em-ic">${icon.store}</div><b>No wholesalers yet</b>Add a shop, give them a username and password, and send them the portal link.</div>`;
+      $$('[data-wid]', el).forEach((b) => (b.onclick = () => openWholesaler(+b.dataset.wid)));
+      return;
+    }
+    const orders = S.ws ? S.ws.orders : [];
+    el.innerHTML = orders.length ? orders.map(wsOrderRow).join('') : `<div class="empty"><div class="em-ic">${icon.store}</div><b>No orders here</b>${S.wsFilter === 'open' ? 'When a wholesaler sends an order it shows up here.' : 'Try another filter.'}</div>`;
+    $$('[data-oid]', el).forEach((b) => (b.onclick = () => openWsOrder(+b.dataset.oid)));
+  }
+
+  function wsOrderRow(o) {
+    const pcs = o.items.reduce((t, i) => t + i.qty, 0);
+    return `<button class="sale ws-row ${o.status === 'pending' ? 'is-unpaid' : ['rejected', 'cancelled'].includes(o.status) ? 'is-cancelled' : ''}" data-oid="${o.id}">
+      <div class="main">
+        <div class="top"><span class="inv">${o.order_no}</span><span class="who" dir="auto">${esc(o.business_name)}</span>${wsPill(o.status)}${WS_ACTIVE.includes(o.status) && !o.paid ? '<span class="pill unpaid">Not paid</span>' : ''}</div>
+        <div class="items">${o.items.slice(0, 6).map((i) => `<span class="mini"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)}</span>`).join('')}${o.items.length > 6 ? `<span class="mini">+${o.items.length - 6} more</span>` : ''}</div>
+        <div class="when">${dateFmt(o.created_at)}${o.due_date ? ` · due ${esc(o.due_date)}` : ''}${o.customer_note ? ` · “${esc(o.customer_note.slice(0, 60))}”` : ''}</div>
+      </div>
+      <div class="amt"><b class="num">${fmt(o.total)}</b><span class="muted" style="font-size:12px">${pcs} pcs · ${esc(cur())}</span></div>
+    </button>`;
+  }
+
+  // the invoice is a receipt page with "INVOICE" on top, drawn here and stored on the server for the wholesaler
+  const orderAsSale = (o) => ({
+    id: o.id, invoice_no: o.order_no, title: ['INVOICE', 'فاتورة'], client_label: 'Wholesaler', client_label_ar: 'تاجر الجملة',
+    customer_name: o.business_name, customer_phone: o.phone, customer_instagram: o.instagram, created_at: o.created_at,
+    items: o.items, subtotal: o.subtotal, discount: o.discount, total: o.total, paid: o.paid,
+    note: [o.due_date ? `Due date: ${o.due_date}` : '', o.customer_note ? `Note: ${o.customer_note}` : ''].filter(Boolean).join(' · '),
+  });
+  const invoiceCache = new Map();
+  function makeInvoice(o) {
+    const key = `${o.id}:${o.updated_at}`;
+    if (invoiceCache.has(key)) return invoiceCache.get(key);
+    const run = pdfQueue.then(async () => {
+      const stage = $('#receipt-stage');
+      stage.innerHTML = receiptHTML(orderAsSale(o));
+      await document.fonts.ready;
+      await Promise.all($$('img', stage).map((im) => (im.complete ? 0 : new Promise((r) => { im.onload = im.onerror = r; }))));
+      const canvas = await window.html2canvas($('.rc', stage), { scale: 2, backgroundColor: '#2E2D4C', useCORS: true, logging: false });
+      stage.innerHTML = '';
+      const { jsPDF } = window.jspdf;
+      const size = [420, (canvas.height / canvas.width) * 420];
+      const doc = new jsPDF({ unit: 'pt', format: size, orientation: size[1] > size[0] ? 'portrait' : 'landscape', compress: true });
+      doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, ...size);
+      doc.setProperties({ title: `Yalla Wear ${o.order_no}`, author: 'Yalla Wear' });
+      const pdf = doc.output('datauristring').replace(/^data:application\/pdf;[^,]*base64,/, 'data:application/pdf;base64,');
+      await api(`/api/ws-orders/${o.id}/invoice`, { body: { pdf, for_version: o.updated_at } });
+      return { blob: doc.output('blob'), filename: `YallaWear-${o.order_no}-${o.business_name.replace(/[^\p{L}\p{N}]+/gu, '-')}.pdf` };
+    });
+    pdfQueue = run.catch(() => {});
+    invoiceCache.set(key, run);
+    run.catch(() => invoiceCache.delete(key));
+    return run;
+  }
+
+  function wsMessage(o) {
+    const s = WS_STATUS[o.status];
+    const hi = o.contact_name || o.business_name;
+    return [
+      `مرحبا ${hi} 👋`,
+      `Your Yalla Wear order ${o.order_no}: ${s.en} · ${s.ar}`,
+      ...(o.status === 'pending' ? [] : [`Total: ${money(o.total)}${WS_ACTIVE.includes(o.status) && !o.paid ? ' (not paid yet)' : ''}`]),
+      ...(o.due_date && !['delivered', 'rejected', 'cancelled'].includes(o.status) ? [`Ready by: ${o.due_date}`] : []),
+      '',
+      `Follow your order and download the invoice: ${portalLink()}`,
+    ].join('\n');
+  }
+
+  async function openWsOrder(id) {
+    const sh = openSheet(`${sheetHead('Wholesale order')}<div data-body>${'<div class="skel sm"></div>'.repeat(5)}</div>`, { wide: true });
+    let o;
+    try { o = (await api(`/api/ws-orders/${id}`)).order; } catch (e) { $('[data-body]', sh).innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+    const refreshInvoice = () => { if (WS_ACTIVE.includes(o.status) && (!o.has_invoice || o.invoice_stale)) makeInvoice(o).then(() => { o.has_invoice = true; o.invoice_stale = false; if (sh.isConnected) paint(); }).catch((e) => console.warn('invoice', e)); };
+    const apply = (r) => {
+      o = r.order;
+      if (r.state) S.data = r.state;
+      if (sh.isConnected) paint();
+      refreshInvoice();
+      renderShell(); // updates the badge, and the list when the Wholesale tab is open
+    };
+    const setStatus = async (status, btn) => {
+      if (['rejected', 'cancelled'].includes(status)) {
+        const ok = await confirmSheet(`${status === 'rejected' ? 'Reject' : 'Cancel'} ${o.order_no}?`, o.items.some((i) => i.from_stock) ? 'Pieces taken from stock go back to stock. The wholesaler sees it in their dashboard.' : 'The wholesaler sees it in their dashboard.', status === 'rejected' ? 'Yes, reject' : 'Yes, cancel', true);
+        if (!ok) return;
+      }
+      busy(btn, async () => {
+        const before = o.status;
+        try {
+          apply(await api(`/api/ws-orders/${o.id}/status`, { body: { status } }));
+          const taken = o.items.reduce((t, i) => t + i.from_stock, 0), all = o.items.reduce((t, i) => t + i.qty, 0);
+          undoable(`${o.order_no}: ${WS_STATUS[status].en}`, status === 'accepted' ? `${taken} of ${all} pieces taken from stock, ${all - taken} to make` : 'Tap “Tell them” to message the wholesaler',
+            async () => { apply(await api(`/api/ws-orders/${o.id}/status`, { body: { status: before, note: 'Undo' } })); toast('ok', 'Undone', `${o.order_no} is ${WS_STATUS[before].en.toLowerCase()} again`); });
+        } catch (e) { toast('err', 'Could not change it', e.message); }
+      });
+    };
+    const paint = () => {
+      const st = o.status;
+      const idx = WS_FLOW.indexOf(st);
+      const closed = ['rejected', 'cancelled'].includes(st);
+      const next = { pending: ['accepted', 'Accept order'], accepted: ['production', 'Start production'], production: ['ready', 'Mark as ready'], ready: ['delivered', 'Mark as delivered'] }[st];
+      const pcs = o.items.reduce((t, i) => t + i.qty, 0), taken = o.items.reduce((t, i) => t + i.from_stock, 0);
+      $('.sheet-title', sh).textContent = o.order_no;
+      $('[data-body]', sh).innerHTML = `
+        <div style="display:flex;gap:8px;align-items:center;margin:-6px 0 12px;flex-wrap:wrap">
+          ${wsPill(st)}${WS_ACTIVE.includes(st) ? (o.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>') : ''}
+          <span class="muted" style="font-size:13px">${dateFmt(o.created_at)} · by ${esc(o.created_by)}</span>
+        </div>
+        ${closed ? '' : `<div class="ws-steps">${WS_FLOW.map((s, i) => `<button class="ws-step ${i < idx ? 'done' : i === idx ? 'now' : ''}" data-set="${s}" title="Set to ${WS_STATUS[s].en}"><i></i><span>${WS_STATUS[s].en}</span></button>`).join('')}</div>`}
+        <div class="kv"><span>Wholesaler</span><button class="link-btn" data-open-ws dir="auto">${esc(o.business_name)}${icon.chevron}</button></div>
+        ${o.contact_name ? `<div class="kv"><span>Contact</span><span dir="auto">${esc(o.contact_name)}${o.phone ? ' · ' + esc(o.phone) : ''}</span></div>` : ''}
+        ${o.due_date ? `<div class="kv"><span>Ready by</span><b>${esc(o.due_date)}</b></div>` : ''}
+        ${o.customer_note ? `<div class="gift-card"><div class="gc-h">Their note</div><div class="gc-m" dir="auto">${esc(o.customer_note)}</div></div>` : ''}
+        ${o.admin_note ? `<div class="kv"><span>Your note (only you see it)</span><span dir="auto">${esc(o.admin_note)}</span></div>` : ''}
+        ${WS_ACTIVE.includes(st) ? `<p class="muted ws-stock-line">${taken} of ${pcs} pieces came from stock · <b>${pcs - taken} to make</b></p>` : st === 'pending' ? `<p class="muted ws-stock-line">Accepting takes what is in stock now; the rest is made to order.</p>` : ''}
+        <div class="detail-items">${o.items.map((it) => {
+          const have = qtyOf(it.color_id, it.size_id);
+          return `<div class="cart-line"><div class="sw" style="background:${esc(it.hex)};color:${isLight(it.hex) ? '#2E2D4C' : '#fff'}">${esc(it.size === 'ONE SIZE' ? '1SZ' : it.size)}</div>
+          <div class="info"><div class="t">${it.qty} × ${esc(it.product)} · ${esc(it.color)} ${esc(it.size)}</div>
+            <div class="s">${PRINT[it.print_type].en} · ${fmt(it.unit_price + it.print_price)} each · ${WS_ACTIVE.includes(st) ? `${it.from_stock} from stock${it.qty - it.from_stock ? `, <b class="to-make">${it.qty - it.from_stock} to make</b>` : ''}` : `${have} in stock now`}</div></div>
+          <div class="p">${fmt(it.line_total)}</div></div>`;
+        }).join('')}</div>
+        <div class="totals">
+          ${o.discount ? `<div class="line"><span>Subtotal</span><span class="num">${fmt(o.subtotal)}</span></div><div class="line"><span>Discount</span><span class="num">−${fmt(o.discount)}</span></div>` : ''}
+          <div class="grand"><span>Total · ${pcs} pcs</span><b class="num" ${closed ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${fmt(o.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
+        </div>
+        ${next ? `<button class="btn primary block" data-next="${next[0]}">${next[1]}</button>` : ''}
+        ${closed ? '<button class="btn block" data-next="pending">Reopen as pending</button>' : ''}
+        <div class="actions-grid" style="margin-top:10px">
+          <button class="btn ${o.phone ? 'wa' : ''}" data-tell>${o.phone ? icon.wa : icon.share}Tell them</button>
+          <button class="btn" data-invoice ${WS_ACTIVE.includes(st) ? '' : 'disabled'}>${icon.down}${o.has_invoice && !o.invoice_stale ? 'Invoice' : WS_ACTIVE.includes(st) ? 'Invoice…' : 'Invoice after accepting'}</button>
+        </div>
+        <div class="actions-grid">
+          <button class="btn" data-edit-order>${icon.edit}Edit order</button>
+          ${WS_ACTIVE.includes(st) ? `<button class="btn" data-paid>${o.paid ? 'Mark as not paid' : 'Mark as paid ✓'}</button>` : ''}
+        </div>
+        ${closed ? '' : `<button class="btn danger block" data-reject style="margin-top:4px">${st === 'pending' ? 'Reject order' : 'Cancel order'}</button>`}
+        ${o.events.length ? `<div class="label" style="margin:22px 0 10px">History</div><div class="ws-events">${o.events.slice().reverse().map((e) => `
+          <div class="ws-ev"><i></i><div><b>${e.kind === 'status' ? WS_STATUS[e.status].en : e.kind === 'created' ? 'Order placed' : e.kind === 'paid' ? esc(e.note) : 'Changed'}</b>
+          <small>${dateFmt(e.created_at)} · ${esc(e.by_name)}${e.note && e.kind !== 'paid' ? ' · ' + esc(e.note) : ''}</small></div></div>`).join('')}</div>` : ''}`;
+      $('[data-open-ws]', sh).onclick = () => openWholesaler(o.wholesaler_id);
+      $$('[data-set]', sh).forEach((b) => (b.onclick = () => { if (b.dataset.set !== o.status) setStatus(b.dataset.set, b); }));
+      $$('[data-next]', sh).forEach((b) => (b.onclick = () => setStatus(b.dataset.next, b)));
+      const rej = $('[data-reject]', sh); if (rej) rej.onclick = () => setStatus(o.status === 'pending' ? 'rejected' : 'cancelled', rej);
+      $('[data-tell]', sh).onclick = () => {
+        const msg = wsMessage(o);
+        if (o.phone) window.open(`https://wa.me/${waDigits(o.phone)}?text=${encodeURIComponent(msg)}`, '_blank');
+        else { copyText(msg); toast('ok', 'Message copied 📋', o.instagram ? 'Paste it in their Instagram chat' : 'Paste it in the chat'); if (o.instagram) window.open(`https://ig.me/m/${encodeURIComponent(o.instagram)}`, '_blank'); }
+      };
+      $('[data-invoice]', sh).onclick = (ev) => busy(ev.currentTarget, async () => {
+        try {
+          const inv = await makeInvoice(o);
+          const file = new File([inv.blob], inv.filename, { type: 'application/pdf' });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: `Yalla Wear ${o.order_no}` }); } catch { /* closed */ } }
+          else downloadBlob(inv.blob, inv.filename);
+        } catch (e) { toast('err', 'Could not make the invoice', e.message); }
+      });
+      $('[data-edit-order]', sh).onclick = () => openWsOrderEditor(o, (r) => apply(r));
+      const pb = $('[data-paid]', sh);
+      if (pb) pb.onclick = () => busy(pb, async () => {
+        const want = !o.paid;
+        try {
+          apply(await api(`/api/ws-orders/${o.id}`, { method: 'PUT', body: { paid: want } }));
+          undoable(want ? 'Marked as paid' : 'Marked as not paid', o.order_no, async () => apply(await api(`/api/ws-orders/${o.id}`, { method: 'PUT', body: { paid: !want } })));
+        } catch (e) { toast('err', e.message); }
+      });
+    };
+    paint();
+    refreshInvoice();
+  }
+
+  async function newWsOrder(wholesaler) {
+    if (!S.wholesalers) await loadWholesalers().catch(() => {});
+    if (!(S.wholesalers || []).length) return toast('err', 'Add a wholesaler first', 'Wholesale → Wholesalers → Add');
+    openWsOrderEditor({ wholesaler_id: wholesaler ? wholesaler.id : null, items: [], discount: 0, paid: 0, due_date: '', admin_note: '', customer_note: '' }, (r) => { openWsOrder(r.order.id); });
+  }
+
+  // edit every part of an order (or write a new one for a wholesaler)
+  function openWsOrderEditor(o, onSaved) {
+    const isNew = !o.id;
+    const D = { items: o.items.map((i) => ({ id: i.id, product_id: i.product_id, color_id: i.color_id, size_id: i.size_id, qty: i.qty, unit_price: i.unit_price, print_type: i.print_type, print_price: i.print_price, saved_print: i.print_type, name: `${i.product} · ${i.color} ${i.size}`, hex: i.hex })) };
+    const wsProducts = () => products();
+    const firstP = wsProducts()[0];
+    const P = { product_id: firstP ? firstP.id : null, color_id: null, size_id: null, qty: 1, print_type: 'none' };
+    const priceOf = (p) => (p.wholesale_price > 0 ? p.wholesale_price : p.price);
+    const sh = openSheet(`${sheetHead(isNew ? 'New wholesale order' : `Edit ${o.order_no}`)}
+      ${isNew ? `<div class="field"><label>Wholesaler</label><select class="input" data-ws>${(S.wholesalers || []).map((w) => `<option value="${w.id}" ${w.id === o.wholesaler_id ? 'selected' : ''}>${esc(w.business_name)}</option>`).join('')}</select></div>` : ''}
+      <div class="label" style="margin-bottom:8px">Items</div>
+      <div class="cart" data-lines></div>
+      <div class="ws-add card">
+        <div class="label" style="margin-bottom:8px">Add an item</div>
+        <div data-picker></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Discount (${esc(cur())})</label><input class="input num" data-discount type="number" min="0" inputmode="numeric" value="${o.discount || ''}" placeholder="0" /></div>
+        <div class="field"><label>Ready by (date)</label><input class="input" data-due type="date" value="${esc(o.due_date || '')}" /></div>
+      </div>
+      <div class="field"><label>Their note (they see it)</label><input class="input" data-cnote dir="auto" value="${esc(o.customer_note || '')}" placeholder="Optional" /></div>
+      <div class="field"><label>Your note (only you see it)</label><input class="input" data-anote dir="auto" value="${esc(o.admin_note || '')}" placeholder="Optional" /></div>
+      <label class="switch" style="margin-bottom:14px"><span>Paid</span><input type="checkbox" data-paid-sw ${o.paid ? 'checked' : ''} /></label>
+      <div class="totals" data-totals></div>
+      <button class="btn primary block" data-save>${isNew ? 'Create order' : 'Save changes & update invoice'}</button>`, { wide: true });
+
+    const lineUnit = (l) => Number(l.unit_price || 0) + (l.id && l.print_type === l.saved_print ? l.print_price : printPriceOf(productById(l.product_id), l.print_type));
+    function paintLines() {
+      $('[data-lines]', sh).innerHTML = D.items.length ? D.items.map((l, i) => `<div class="cart-line ws-edit-line">
+        <div class="sw" style="background:${esc(l.hex)}"></div>
+        <div class="info"><div class="t">${esc(l.name)}</div><div class="s">${PRINT[l.print_type].en} · ${qtyOf(l.color_id, l.size_id)} in stock</div>
+          <div class="row ws-line-inputs">
+            <label><span>Qty</span><input class="input num" type="number" min="1" inputmode="numeric" data-lq="${i}" value="${l.qty}" /></label>
+            <label><span>Price each</span><input class="input num" type="number" min="0" inputmode="numeric" data-lp="${i}" value="${l.unit_price}" /></label>
+          </div></div>
+        <div class="p num" data-lt="${i}">${fmt(lineUnit(l) * l.qty)}</div><button class="x" data-lrm="${i}" aria-label="Remove">×</button></div>`).join('') : '<p class="muted" style="font-size:13px;margin:0">No items yet — add them below.</p>';
+      $$('[data-lq]', sh).forEach((inp) => (inp.oninput = () => { D.items[+inp.dataset.lq].qty = Math.max(1, Number(inp.value) || 1); $(`[data-lt="${inp.dataset.lq}"]`, sh).textContent = fmt(lineUnit(D.items[+inp.dataset.lq]) * D.items[+inp.dataset.lq].qty); paintTotals(); }));
+      $$('[data-lp]', sh).forEach((inp) => (inp.oninput = () => { D.items[+inp.dataset.lp].unit_price = Math.max(0, Number(inp.value) || 0); $(`[data-lt="${inp.dataset.lp}"]`, sh).textContent = fmt(lineUnit(D.items[+inp.dataset.lp]) * D.items[+inp.dataset.lp].qty); paintTotals(); }));
+      $$('[data-lrm]', sh).forEach((b) => (b.onclick = () => { D.items.splice(+b.dataset.lrm, 1); paintLines(); paintTotals(); }));
+    }
+    function paintPicker() {
+      const p = productById(P.product_id);
+      if (!p) { $('[data-picker]', sh).innerHTML = '<p class="muted">No products.</p>'; return; }
+      $('[data-picker]', sh).innerHTML = `
+        ${wsProducts().length > 1 ? `<div class="chips" style="margin-bottom:10px">${wsProducts().map((x) => `<button class="chip ${x.id === P.product_id ? 'on' : ''}" data-pp="${x.id}">${esc(x.name)}</button>`).join('')}</div>` : ''}
+        <div class="chips" style="margin-bottom:10px">${colorsOf(p.id).map((c) => `<button class="chip ${P.color_id === c.id ? 'on' : ''}" data-pc="${c.id}"><i class="sw" style="background:${esc(c.hex)}"></i>${esc(c.name)}</button>`).join('')}</div>
+        <div class="chips" style="margin-bottom:10px">${sizesOf(p.id).map((s) => `<button class="chip size-chip ${P.size_id === s.id ? 'on' : ''}" data-ps="${s.id}" ${P.color_id ? '' : 'disabled'}><span class="s">${esc(s.name)}</span><span class="cnt">${P.color_id ? qtyOf(P.color_id, s.id) + ' in stock' : '—'}</span></button>`).join('')}</div>
+        ${p.printable ? `<div class="seg" style="margin-bottom:10px">${['none', 'front', 'front_back'].map((t) => `<button class="${P.print_type === t ? 'on' : ''}" data-pt="${t}">${PRINT[t].en}<small>+${fmt(printPriceOf(p, t))}</small></button>`).join('')}</div>` : ''}
+        <div class="row" style="align-items:flex-end">
+          <div class="field" style="margin:0"><label>Qty</label><input class="input num" type="number" min="1" inputmode="numeric" data-pq value="${P.qty}" /></div>
+          <div class="field" style="margin:0"><label>Price each</label><input class="input num" type="number" min="0" inputmode="numeric" data-pu value="${priceOf(p)}" /></div>
+          <button class="btn" data-padd style="flex:0 0 auto" ${P.color_id && P.size_id ? '' : 'disabled'}>${icon.plus}Add</button>
+        </div>`;
+      $$('[data-pp]', sh).forEach((b) => (b.onclick = () => { Object.assign(P, { product_id: +b.dataset.pp, color_id: null, size_id: null, print_type: 'none' }); paintPicker(); }));
+      $$('[data-pc]', sh).forEach((b) => (b.onclick = () => { P.color_id = +b.dataset.pc; P.size_id = null; paintPicker(); }));
+      $$('[data-ps]', sh).forEach((b) => (b.onclick = () => { P.size_id = +b.dataset.ps; paintPicker(); }));
+      $$('[data-pt]', sh).forEach((b) => (b.onclick = () => { P.print_type = b.dataset.pt; paintPicker(); }));
+      $('[data-pq]', sh).oninput = (e) => { P.qty = Math.max(1, Number(e.target.value) || 1); };
+      $('[data-padd]', sh).onclick = () => {
+        const c = colorById(P.color_id), s = sizeById(P.size_id);
+        D.items.push({ product_id: p.id, color_id: c.id, size_id: s.id, qty: P.qty, unit_price: Math.max(0, Number($('[data-pu]', sh).value) || 0), print_type: P.print_type, name: `${p.name} · ${c.name} ${s.name}`, hex: c.hex });
+        P.size_id = null; P.qty = 1;
+        paintPicker(); paintLines(); paintTotals();
+      };
+    }
+    function paintTotals() {
+      const sub = D.items.reduce((t, l) => t + lineUnit(l) * l.qty, 0);
+      const disc = Math.min(sub, Math.max(0, Number($('[data-discount]', sh).value) || 0));
+      const pcs = D.items.reduce((t, l) => t + l.qty, 0);
+      $('[data-totals]', sh).innerHTML = `<div class="line"><span>${pcs} pieces</span><span class="num">${fmt(sub)}</span></div>
+        ${disc ? `<div class="line"><span>Discount</span><span class="num">−${fmt(disc)}</span></div>` : ''}
+        <div class="grand"><span>Total</span><b class="num">${fmt(sub - disc)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>`;
+      $('[data-save]', sh).disabled = !D.items.length;
+    }
+    $('[data-discount]', sh).oninput = paintTotals;
+    $('[data-save]', sh).onclick = (ev) => busy(ev.currentTarget, async () => {
+      const body = {
+        items: D.items.map((l) => ({ id: l.id, color_id: l.color_id, size_id: l.size_id, qty: l.qty, unit_price: l.unit_price, print_type: l.print_type })),
+        discount: Number($('[data-discount]', sh).value) || 0, due_date: $('[data-due]', sh).value,
+        customer_note: $('[data-cnote]', sh).value, admin_note: $('[data-anote]', sh).value, paid: $('[data-paid-sw]', sh).checked,
+      };
+      if (isNew) body.wholesaler_id = Number($('[data-ws]', sh).value);
+      try {
+        const r = await api(isNew ? '/api/ws-orders' : `/api/ws-orders/${o.id}`, { method: isNew ? 'POST' : 'PUT', body });
+        closeSheet();
+        toast('ok', isNew ? `${r.order.order_no} created` : 'Order updated ✓', isNew ? 'It is pending — accept it to start' : 'The wholesaler sees the change and the new invoice');
+        onSaved && onSaved(r);
+      } catch (e) { toast('err', 'Could not save', e.message); }
+    });
+    paintLines(); paintPicker(); paintTotals();
+  }
+
+  async function openWholesaler(id, justSetPassword = null) {
+    const sh = openSheet(`${sheetHead('Wholesaler')}<div data-body>${'<div class="skel sm"></div>'.repeat(4)}</div>`);
+    let data;
+    try { data = await api(`/api/wholesalers/${id}`); } catch (e) { $('[data-body]', sh).innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+    let pw = justSetPassword;
+    const paint = () => {
+      const { wholesaler: w, orders } = data;
+      $('[data-body]', sh).innerHTML = `
+        <div class="cl-hero">${avatar(w.business_name, 'lg')}
+          <div class="cl-id"><div class="nm" dir="auto">${esc(w.business_name)}</div>
+            <div class="muted">${[w.contact_name, w.city].filter(Boolean).map(esc).join(' · ') || 'Wholesaler'} · since ${dateOnly(w.created_at)}</div></div></div>
+        <div class="cl-stats">
+          <div><span>Orders</span><b class="num">${w.orders}</b></div>
+          <div><span>Bought</span><b class="num">${fmt(w.spent)}<small>${esc(cur())}</small></b></div>
+          <div class="${w.unpaid_amount ? 'owes' : ''}"><span>Not paid</span><b class="num">${fmt(w.unpaid_amount)}<small>${esc(cur())}</small></b></div>
+        </div>
+        <div class="ws-login card">
+          <div><div class="kpi-label">Portal login</div><div class="ws-user">@${esc(w.username)}${pw ? ` · <span class="mono">${esc(pw)}</span>` : ''}</div>
+            <small class="muted">${w.last_login_at ? `Last opened ${dateFmt(w.last_login_at)}` : 'Has not logged in yet'}</small></div>
+          <button class="btn sm ${w.phone ? 'wa' : ''}" data-send-login>${w.phone ? icon.wa : icon.share}Send login</button>
+        </div>
+        ${w.phone || w.instagram ? `<div class="actions-grid cl-contact">
+          ${w.phone ? `<a class="btn wa" href="https://wa.me/${waDigits(w.phone)}" target="_blank" rel="noopener">${icon.wa}${esc(w.phone)}</a>` : ''}
+          ${w.instagram ? `<a class="btn ig" href="https://ig.me/m/${encodeURIComponent(w.instagram)}" target="_blank" rel="noopener">${icon.ig}@${esc(w.instagram)}</a>` : ''}
+        </div>` : ''}
+        ${w.note ? `<div class="cl-note">${esc(w.note)}</div>` : ''}
+        <button class="btn primary block" data-new-order>${icon.plus}New order for ${esc(w.business_name)}</button>
+        <div class="actions-grid" style="margin-top:10px">
+          <button class="btn" data-edit>${icon.edit}Edit / new password</button>
+          <button class="btn danger" data-remove>Remove</button>
+        </div>
+        <div class="label" style="margin:22px 0 10px">Orders${orders.length ? ` · ${orders.length}` : ''}</div>
+        <div class="sales-list">${orders.length ? orders.map(wsOrderRow).join('') : '<p class="muted" style="font-size:13px">No orders yet.</p>'}</div>`;
+      $$('[data-oid]', sh).forEach((b) => (b.onclick = () => openWsOrder(+b.dataset.oid)));
+      $('[data-send-login]', sh).onclick = () => {
+        const msg = [`مرحبا ${w.contact_name || w.business_name} 👋`, 'Your Yalla Wear wholesale account is ready. Order and follow your orders here:', portalLink(), '',
+          `Username: ${w.username}`, pw ? `Password: ${pw}` : 'Password: the one we gave you', '', 'You can change the password after you log in.'].join('\n');
+        if (w.phone) window.open(`https://wa.me/${waDigits(w.phone)}?text=${encodeURIComponent(msg)}`, '_blank');
+        else { copyText(msg); toast('ok', 'Login message copied 📋', 'Paste it in the chat'); }
+      };
+      $('[data-new-order]', sh).onclick = () => newWsOrder(w);
+      $('[data-edit]', sh).onclick = () => openWholesalerEditor(w, (saved, newPw) => { data.wholesaler = saved; if (newPw) pw = newPw; paint(); });
+      $('[data-remove]', sh).onclick = async () => {
+        const ok = await confirmSheet(`Remove ${w.business_name}?`, 'Their login stops working right away. Their orders stay.', 'Yes, remove', true);
+        if (!ok) return;
+        try {
+          await api(`/api/wholesalers/${w.id}/archive`, { body: { archived: true } });
+          closeSheet(); await loadWholesalers(); if (S.view === 'wholesale') paintWs();
+          undoable(`${w.business_name} removed`, 'Their orders are kept', async () => { await api(`/api/wholesalers/${w.id}/archive`, { body: { archived: false } }); await loadWholesalers(); if (S.view === 'wholesale') paintWs(); });
+        } catch (e) { toast('err', 'Could not remove', e.message); }
+      };
+    };
+    paint();
+  }
+
+  const newPassword = () => { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; const r = crypto.getRandomValues(new Uint8Array(8)); return [...r].map((x) => a[x % a.length]).join(''); };
+  function openWholesalerEditor(w, onSaved) {
+    const editing = !!w;
+    const sh = openSheet(`${sheetHead(editing ? 'Edit wholesaler' : 'New wholesaler')}
+      <div class="row stack-sm">
+        <div class="field"><label>Shop name</label><input class="input" data-f="business_name" dir="auto" value="${esc(w ? w.business_name : '')}" placeholder="e.g. Lattakia Style" /></div>
+        <div class="field"><label>Contact person</label><input class="input" data-f="contact_name" dir="auto" value="${esc(w ? w.contact_name : '')}" placeholder="Optional" /></div>
+      </div>
+      <div class="row stack-sm">
+        <div class="field"><label>WhatsApp number</label><input class="input" data-f="phone" type="tel" inputmode="tel" value="${esc(w ? w.phone : '')}" placeholder="0944 123 456" /></div>
+        <div class="field"><label>City</label><input class="input" data-f="city" dir="auto" value="${esc(w ? w.city : '')}" placeholder="Optional" /></div>
+      </div>
+      <div class="field"><label>Instagram</label><input class="input" data-f="instagram" value="${esc(w && w.instagram ? '@' + w.instagram : '')}" placeholder="@shop" autocapitalize="none" /></div>
+      <div class="field"><label>Note (only you see it)</label><input class="input" data-f="note" value="${esc(w ? w.note : '')}" placeholder="Optional" /></div>
+      <div class="label" style="margin:6px 0 8px">Portal login</div>
+      <div class="row stack-sm">
+        <div class="field"><label>Username</label><input class="input" data-f="username" value="${esc(w ? w.username : '')}" placeholder="e.g. lattakia" autocapitalize="none" autocorrect="off" spellcheck="false" /></div>
+        <div class="field"><label>${editing ? 'New password (leave empty to keep)' : 'Password'}</label>
+          <div class="row" style="gap:6px"><input class="input mono" data-f="password" value="${editing ? '' : newPassword()}" autocomplete="new-password" autocapitalize="none" spellcheck="false" /><button class="btn" data-gen style="flex:0 0 auto" title="Make a new password">↻</button></div></div>
+      </div>
+      <button class="btn primary block" data-save>${editing ? 'Save' : 'Create wholesaler'}</button>`, { wide: true });
+    const f = (k) => $(`[data-f="${k}"]`, sh);
+    $('[data-gen]', sh).onclick = () => { f('password').value = newPassword(); };
+    if (!editing) f('business_name').addEventListener('input', () => {
+      if (f('username').dataset.touched) return;
+      f('username').value = f('business_name').value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '').slice(0, 20);
+    });
+    f('username').addEventListener('input', () => { f('username').dataset.touched = '1'; });
+    $('[data-save]', sh).onclick = (ev) => busy(ev.currentTarget, async () => {
+      const body = Object.fromEntries(['business_name', 'contact_name', 'phone', 'city', 'instagram', 'note', 'username', 'password'].map((k) => [k, f(k).value.trim()]));
+      if (!body.business_name) { f('business_name').focus(); return toast('err', 'Shop name is missing'); }
+      try {
+        const r = await api(editing ? `/api/wholesalers/${w.id}` : '/api/wholesalers', { method: editing ? 'PUT' : 'POST', body });
+        closeSheet();
+        await loadWholesalers().catch(() => {});
+        if (S.view === 'wholesale') paintWs();
+        toast('ok', editing ? 'Saved' : 'Wholesaler added', body.password ? 'Tap “Send login” to send them the link and password' : r.wholesaler.business_name, 6000);
+        if (editing) onSaved && onSaved(r.wholesaler, body.password || null);
+        else openWholesaler(r.wholesaler.id, body.password);
+      } catch (e) { toast('err', 'Could not save', e.message); }
+    });
+  }
+
   // ---------- SETTINGS ----------
   function openSettings() {
     const st = S.data.settings;
@@ -1371,9 +1819,17 @@
           ${st.logo ? '<button class="btn sm danger" data-logo-rm style="flex:0 0 auto">Remove</button>' : ''}
         </div>
       </div>
+      <div class="label" style="margin:20px 0 8px">Wholesale portal</div>
+      <div class="ws-portal card">
+        <div><small class="muted">Wholesalers log in here</small><div class="mono" style="overflow-wrap:anywhere">${esc(portalLink())}</div></div>
+        <button class="btn sm" data-copy-portal>${icon.share}Copy</button>
+      </div>
+      <div class="field"><label>Welcome message on the portal</label><textarea class="input" data-k="ws_welcome" rows="2" maxlength="400" dir="auto">${esc(st.ws_welcome || '')}</textarea></div>
+      <label class="switch" style="margin-bottom:14px"><span>Show wholesalers the exact stock count (off = just “in stock” / “made to order”)</span><input type="checkbox" data-ws-stock ${st.ws_show_stock === '0' ? '' : 'checked'} /></label>
       <button class="btn primary block" data-save>Save settings</button>
       <a class="btn block" href="/api/backup" download style="margin-top:10px">${icon.down}Download backup (all stock + sales)</a>`, { wide: true });
 
+    $('[data-copy-portal]', sh).onclick = () => { copyText(portalLink()); toast('ok', 'Portal link copied 📋'); };
     $('[data-newp]', sh).onclick = () => { closeSheet(); openProductEditor(); };
     $$('[data-editp]', sh).forEach((b) => (b.onclick = () => { closeSheet(); S.pid = +b.dataset.editp; openProductEditor(+b.dataset.editp); }));
     $$('[data-restore]', sh).forEach((b) => (b.onclick = async () => {
@@ -1390,7 +1846,7 @@
     const rm = $('[data-logo-rm]', sh);
     if (rm) rm.onclick = () => { logo = ''; $('[data-logo-prev]', sh).innerHTML = '<img src="/brand/mark.png" alt="">'; rm.remove(); };
     $('[data-save]', sh).onclick = async () => {
-      const body = { logo };
+      const body = { logo, ws_show_stock: $('[data-ws-stock]', sh).checked ? '1' : '0' };
       $$('[data-k]', sh).forEach((i) => (body[i.dataset.k] = i.value));
       try { const r = await api('/api/settings', { method: 'PUT', body }); S.data = r.state; S.pdfCache.clear(); closeSheet(); refreshView(); toast('ok', 'Settings saved'); }
       catch (e) { toast('err', e.message); }

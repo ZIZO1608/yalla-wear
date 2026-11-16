@@ -682,3 +682,102 @@ textarea.input { resize: vertical; min-height: 64px; line-height: 1.45; }
 .rc-gift-sum { font-size: 15px; color: #ABAACB; text-align: right; line-height: 1.7; }
 .rc-gift-sum .ar { font-family: 'Cairo', sans-serif; }
 .rc-gift-msg { font-size: 15px; color: #F2F5F1; border: 1px dashed rgba(192,219,198,.45); white-space: pre-line; }
+
+/* ---------- wholesale (admin) ---------- */
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .3px; }
+.pill.done { background: rgba(255, 255, 255, .08); color: var(--text); }
+.pill.ws-pending { background: var(--amber-soft); color: var(--amber); }
+.ws-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 18px 2px 12px; }
+.ws-seg { flex: 0 1 auto; }
+.ws-seg button small { font-size: 11px; color: var(--muted); margin-left: 2px; }
+.ws-filters { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; padding-bottom: 2px; }
+.ws-filters::-webkit-scrollbar { display: none; }
+.ws-filters .chip { white-space: nowrap; }
+.ws-steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin: 0 0 14px; }
+.ws-step { border: 0; background: transparent; padding: 0; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 600; text-align: left; }
+.ws-step i { height: 6px; border-radius: 3px; background: var(--surface-2); }
+.ws-step.done i { background: rgba(192, 219, 198, .55); }
+.ws-step.now i { background: var(--mint); box-shadow: 0 0 0 3px var(--mint-soft); }
+.ws-step.now { color: var(--mint); }
+.ws-stock-line { font-size: 13px; margin: 8px 0 10px; }
+.to-make { color: var(--amber); }
+.ws-events { display: flex; flex-direction: column; gap: 0; border-left: 2px solid var(--line-2); margin-left: 6px; padding-left: 14px; }
+.ws-ev { position: relative; padding: 0 0 12px; }
+.ws-ev i { position: absolute; left: -20px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 3px var(--bg); }
+.ws-ev b { font-size: 14px; display: block; }
+.ws-ev small { color: var(--muted); font-size: 12px; }
+.ws-login { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.ws-user { font-weight: 700; font-size: 16px; margin: 2px 0; overflow-wrap: anywhere; }
+.ws-portal { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 12px 14px; }
+.ws-add { margin: 4px 0 14px; padding: 14px; }
+.ws-edit-line { align-items: flex-start; }
+.ws-edit-line .sw { width: 22px; height: 22px; border-radius: 50%; margin-top: 2px; }
+.ws-line-inputs { margin-top: 8px; gap: 8px; }
+.ws-line-inputs label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); font-weight: 600; flex: 1; }
+.ws-line-inputs .input { padding: 8px 10px; font-size: 15px; }
+select.input { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 34px; }
+@media (max-width: 460px) {
+  .tab { padding: 12px 12px; }
+  .ws-step span { font-size: 9.5px; }
+}
+.ws-seg button { white-space: nowrap; }
+
+/* ---------- wholesale portal (/wholesale) ---------- */
+.portal .bi { font-size: 11px; text-transform: none; letter-spacing: 0; font-weight: 700; margin-left: 4px; }
+.portal-help { font-size: 12px; text-align: center; margin: 14px 0 0; line-height: 1.6; }
+.portal .tab .badge.mint { background: var(--mint); color: var(--mint-ink); }
+.welcome { margin-bottom: 14px; }
+.welcome .wl-hi { font-size: 16px; }
+.welcome p { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; white-space: pre-line; }
+.wp { margin-bottom: 14px; padding: 14px; }
+.wp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.wp-name { font-family: var(--display); font-size: 28px; letter-spacing: 1px; line-height: 1; }
+.wp-name .ar { font-size: 16px; color: var(--muted); letter-spacing: 0; }
+.wp-meta { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.wp-meta b { color: var(--mint); }
+.wp-count { min-width: 58px; text-align: center; border-radius: 12px; border: 1px solid var(--line-2); padding: 6px 8px; color: var(--muted); }
+.wp-count b { display: block; font-family: var(--display); font-size: 26px; line-height: 1; color: var(--text); }
+.wp-count small { font-size: 11px; }
+.wp-count.on { border-color: var(--mint); background: var(--mint-soft); }
+.wp-count.on b { color: var(--mint); }
+.wp-count.short { border-color: var(--amber); background: var(--amber-soft); }
+.wp-count.short b { color: var(--amber); }
+.wp-print { margin-bottom: 12px; }
+.wp-warn { color: var(--amber); font-size: 13px; margin: 10px 0 0; }
+.wp-warn.box { background: var(--amber-soft); border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; }
+.wp-grid { background: var(--bg-2); }
+.order-grid { min-width: 0; }
+.order-grid thead .col-head { font-size: 11px; }
+.order-grid thead .col-head .ar { font-size: 11px; text-transform: none; }
+.order-grid td { padding: 5px 3px; }
+.oc { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.oc input { width: 100%; min-width: 50px; height: 46px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--surface); text-align: center; font-family: var(--display); font-size: 24px; color: var(--text); outline: none; -moz-appearance: textfield; }
+.oc input::-webkit-outer-spin-button, .oc input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.oc input::placeholder { color: rgba(242, 245, 241, .2); }
+.oc input:focus { border-color: var(--mint); box-shadow: 0 0 0 3px var(--mint-soft); }
+.oc.has input { border-color: var(--mint); background: var(--mint-soft); color: var(--mint); }
+.oc small { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.oc small.mto { color: var(--amber); opacity: .85; }
+.oc small.amber { color: var(--amber); }
+.cart-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + var(--safe-b)); z-index: 29; width: min(560px, calc(100% - 24px)); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 10px 10px 16px; border-radius: 18px; background: rgba(54, 53, 89, .96); border: 1px solid rgba(192, 219, 198, .4); box-shadow: var(--shadow); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); animation: up .2s ease; }
+.cart-bar b { display: block; font-size: 16px; }
+.cart-bar b small { font-size: 12px; color: var(--muted); }
+.cart-bar > div > small { font-size: 12px; color: var(--muted); }
+body.has-cart .shell { padding-bottom: calc(180px + var(--safe-b)); }
+body.kb .cart-bar { display: none; }
+.edit-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 14px; background: var(--amber-soft); border: 1px solid rgba(255, 194, 75, .4); margin-bottom: 14px; }
+.edit-banner small { display: block; color: var(--muted); font-size: 12px; }
+.mini-steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin: 8px 0 6px; max-width: 220px; }
+.mini-steps i { height: 4px; border-radius: 2px; background: var(--surface-2); }
+.mini-steps i.on { background: var(--mint); }
+.ws-steps.big .ws-step { font-size: 11px; }
+.ws-steps.big .ws-step .ar { font-size: 10px; color: var(--muted); direction: rtl; text-align: left; }
+.status-line { font-size: 14px; line-height: 1.6; margin: 0 0 12px; }
+.sent-banner { background: var(--mint-soft); color: var(--mint); border-radius: 12px; padding: 12px 14px; font-weight: 600; margin-bottom: 14px; }
+.acct-name { font-family: var(--display); font-size: 30px; letter-spacing: 1px; margin: 4px 0 2px; }
+table.stock.order-grid { table-layout: auto; min-width: max-content; width: 100%; }
+.order-grid thead th { min-width: 66px; }
+.order-grid tbody th { position: sticky; left: 0; background: var(--bg-2); z-index: 1; }
+.oc input { min-width: 58px; }
+table.stock.order-grid { width: max-content; min-width: 100%; }
+.order-grid .oc input { width: 60px; min-width: 0; }

@@ -8,6 +8,16 @@ The stock and sales tracker for Yalla Wear. You and Zohrab log in from your phon
   - Removing a product, color or size only hides it. Old sales and receipts keep their original names and prices, and you can restore it later from Settings.
 - **Stock page.** Product tabs across the top, each with a live color × size grid. A box turns red when 1 or fewer are left and yellow at 6 or more ("push sales"). Tap a box to sell it or fix the count. There's also Restock and a full history.
 - **New sale.** Pick product, color, size, print and quantity. You can put several products in one sale and change the price per line (for wholesale), add a discount, mark it paid or not paid, and add a note.
+  - **Gift.** Turn on "This is a gift" to add who it's for and a message (printed on the PDF, the receipt page and the WhatsApp/Instagram message), hide the prices (gift receipt), and add a gift wrap fee (default price in Settings). Any line can also be a **free gift** (0 price, stock still goes down).
+- **Edit a sale.** Open a sale → **Edit sale**: change the client, number, items, prices, discount, gift, note or paid. Stock follows the change, and the PDF, receipt link and message are made again with the new details. Renaming a client in the client book can also rename them on their past receipts.
+- **Wholesale.** Shops you give a login to order from **/wholesale** (for example `stock.yourdomain.com/wholesale`).
+  - Give a product a **wholesale price** (and the least pieces per order) in the product editor. Only those products show on the portal.
+  - **Wholesale tab → Wholesalers → Add**: shop name, contact, and a username and password. **Send login** sends them the link and password on WhatsApp.
+  - They type how many they want in a color × size grid, see what's in stock and what will be made for them, and send the order. They can change or cancel it until you accept it.
+  - You **Accept → Start production → Mark ready → Mark delivered** (or Reject). Accepting takes what's in stock; the rest is "to make". Rejecting or cancelling puts those pieces back.
+  - **Edit order** changes anything: items, prices, discount, ready-by date, notes, paid. The invoice (PDF) is remade after every change and the wholesaler downloads it from their dashboard. **Tell them** sends a status message on WhatsApp.
+  - Their dashboard shows every order, its progress, totals, what they still owe, and the history.
+  - Settings → Wholesale portal: the welcome message, and whether they see exact stock counts.
 - **Client contact.** One box for a phone number or an Instagram @username, and the app recognizes which one it is. Clients you've sold to before are suggested and their contact fills in.
 - **Sending the receipt.** After saving there's one button:
   - **WhatsApp** opens the chat with a message and a private receipt link (the receipt image shows as a preview).
