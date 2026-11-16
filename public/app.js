@@ -627,14 +627,28 @@
   }
 
   // ---------- NEW SALE ----------
+  // New sale, or editing a saved one (preset.edit = the sale): same form, filled in.
   function openNewSale(preset = {}) {
     if (!products().length) return toast('err', 'Add a product first', 'Stock → + Product');
-    const D = { items: [] };
-    const startPid = preset.product_id || (products().length === 1 ? products()[0].id : currentPid());
+    const E = preset.edit || null;
+    const D = { items: E ? E.items.map((i) => ({
+      id: i.id, product_id: i.product_id, color_id: i.color_id, size_id: i.size_id, qty: i.qty, print_type: i.print_type,
+      unit_price: i.unit_price, free: !!i.free, saved_print: i.print_type, saved_print_price: i.print_price,
+      snap: { product: i.product, color: i.color, size: i.size, hex: i.hex },
+    })) : [] };
+    // pieces this sale already holds count as available while editing it
+    const held = {};
+    if (E) for (const i of E.items) held[`${i.color_id}:${i.size_id}`] = (held[`${i.color_id}:${i.size_id}`] || 0) + i.qty;
+    const firstActive = E && E.items.map((i) => productById(i.product_id)).find((p) => p && !p.archived);
+    const startPid = preset.product_id || (firstActive ? firstActive.id : products().length === 1 ? products()[0].id : currentPid());
     const p0 = productById(startPid);
     D.pick = { product_id: startPid, color_id: preset.color_id || null, size_id: preset.size_id || null, qty: 1, print_type: 'none', unit_price: p0 ? p0.price : 0 };
+    const wrapDefault = Number(S.data.settings.gift_wrap_price) || 0;
+    const G = E ? { on: !!E.gift, to: E.gift_to, message: E.gift_message, hide: !!E.gift_hide_prices, wrapOn: E.gift_wrap > 0, wrap: E.gift_wrap || wrapDefault }
+      : { on: false, to: '', message: '', hide: false, wrapOn: false, wrap: wrapDefault };
+    const saveLabel = E ? 'Save changes & update receipt' : 'Save sale & make receipt';
 
-    const sh = openSheet(`${sheetHead('New sale')}
+    const sh = openSheet(`${sheetHead(E ? `Edit ${invNo(E.id)}` : 'New sale')}
       <div class="row stack-sm">
         <div class="field"><label>Client name</label><input class="input" data-name placeholder="Who is buying? Type a name or number" autocomplete="off" dir="auto" />
           <div class="hint" data-name-hint></div></div>
@@ -646,16 +660,30 @@
       <div class="builder" data-builder></div>
       <div class="cart" data-cart></div>
       <div class="row">
-        <div class="field"><label>Discount (${esc(cur())})</label><input class="input num" data-discount type="number" min="0" inputmode="numeric" placeholder="0" /></div>
-        <div class="field"><label>Payment</label><label class="switch"><span data-paid-lbl>Paid</span><input type="checkbox" data-paid checked /></label></div>
+        <div class="field"><label>Discount (${esc(cur())})</label><input class="input num" data-discount type="number" min="0" inputmode="numeric" placeholder="0" value="${E && E.discount ? E.discount : ''}" /></div>
+        <div class="field"><label>Payment</label><label class="switch"><span data-paid-lbl>${!E || E.paid ? 'Paid' : 'Not paid yet'}</span><input type="checkbox" data-paid ${!E || E.paid ? 'checked' : ''} /></label></div>
       </div>
-      <div class="field"><label>Note (design, delivery…)</label><input class="input" data-note placeholder="Optional" /></div>
+      <div class="gift-box ${G.on ? 'on' : ''}" data-gift-box>
+        <label class="switch gift-switch"><span>🎁 This is a gift <small class="ar">هدية</small></span><input type="checkbox" data-g="on" ${G.on ? 'checked' : ''} /></label>
+        <div class="gift-fields" data-gift-fields ${G.on ? '' : 'hidden'}>
+          <div class="field"><label>Gift for (name on the receipt)</label><input class="input" data-g="to" dir="auto" placeholder="e.g. Lara" value="${esc(G.to)}" maxlength="60" /></div>
+          <div class="field"><label>Gift message</label><textarea class="input" data-g="message" dir="auto" rows="2" maxlength="300" placeholder="e.g. Happy birthday! 🖤">${esc(G.message)}</textarea></div>
+          <label class="switch" style="margin-bottom:10px"><span>Gift receipt — hide prices</span><input type="checkbox" data-g="hide" ${G.hide ? 'checked' : ''} /></label>
+          <div class="row" style="align-items:center">
+            <label class="switch" style="flex:1"><span>Gift wrap</span><input type="checkbox" data-g="wrapOn" ${G.wrapOn ? 'checked' : ''} /></label>
+            <input class="input num" data-g="wrap" type="number" min="0" inputmode="numeric" style="flex:0 0 130px" value="${G.wrap}" ${G.wrapOn ? '' : 'disabled'} aria-label="Gift wrap price" />
+          </div>
+        </div>
+      </div>
+      <div class="field"><label>Note (design, delivery…)</label><input class="input" data-note placeholder="Optional" value="${esc(E ? E.note : '')}" /></div>
       <div class="totals" data-totals></div>
-      <button class="btn primary block" data-save>Save sale & make receipt</button>`, { wide: true });
+      <button class="btn primary block" data-save>${saveLabel}</button>`, { wide: true });
 
     const used = (cid, sid) => D.items.filter((i) => i.color_id === cid && i.size_id === sid).reduce((t, i) => t + i.qty, 0);
-    const avail = (cid, sid) => qtyOf(cid, sid) - used(cid, sid);
-    const lineUnit = (it) => it.unit_price + printPriceOf(productById(it.product_id), it.print_type);
+    const avail = (cid, sid) => qtyOf(cid, sid) + (held[`${cid}:${sid}`] || 0) - used(cid, sid);
+    const linePrint = (it) => (it.id && it.print_type === it.saved_print ? it.saved_print_price : printPriceOf(productById(it.product_id), it.print_type));
+    const lineUnit = (it) => (it.free ? 0 : it.unit_price + linePrint(it));
+    const wrapFee = () => (G.on && G.wrapOn ? Math.max(0, Number(G.wrap) || 0) : 0);
 
     function renderBuilder() {
       const pk = D.pick;
@@ -664,7 +692,7 @@
       const maxQ = pk.color_id && pk.size_id ? avail(pk.color_id, pk.size_id) : 0;
       if (pk.qty > maxQ) pk.qty = Math.max(1, maxQ);
       if (!prod.printable) pk.print_type = 'none';
-      const unitTotal = pk.unit_price + printPriceOf(prod, pk.print_type);
+      const unitTotal = pk.unit_price + (pk.back && pk.print_type === pk.back.saved_print ? pk.back.saved_print_price : printPriceOf(prod, pk.print_type));
       $('[data-builder]', sh).innerHTML = `
         ${products().length > 1 ? `<div class="block"><span class="label">Product</span><div class="chips">
           ${products().map((x) => { const t = colorsOf(x.id).reduce((a, c) => a + sizesOf(x.id).reduce((b, s) => b + avail(c.id, s.id), 0), 0);
@@ -690,9 +718,12 @@
         <div class="row" style="align-items:flex-end">
           <div style="flex:0 0 auto"><span class="label" style="display:block;margin-bottom:8px">Qty</span>
             <div class="stepper"><button data-q="-1" aria-label="Less">−</button><span class="num">${pk.qty}</span><button data-q="1" aria-label="More">+</button></div></div>
-          <div><span class="label" style="display:block;margin-bottom:8px">${esc(prod.name)} price</span><input class="input num" data-unit type="number" min="0" inputmode="numeric" value="${pk.unit_price}" /></div>
+          <div><span class="label" style="display:block;margin-bottom:8px">${esc(prod.name)} price</span><input class="input num" data-unit type="number" min="0" inputmode="numeric" value="${pk.unit_price}" ${pk.free ? 'disabled' : ''} /></div>
+          <div style="flex:0 0 auto"><span class="label" style="display:block;margin-bottom:8px">Free gift</span>
+            <button class="chip free-chip ${pk.free ? 'on' : ''}" data-free-pick aria-pressed="${!!pk.free}">🎁 ${pk.free ? 'Free' : 'No'}</button></div>
         </div>
-        <button class="btn block" data-add style="margin-top:14px" ${pk.color_id && pk.size_id && maxQ > 0 ? '' : 'disabled'}>${icon.plus}Add to sale${pk.color_id && pk.size_id ? ` · <span class="num">${fmt(unitTotal * pk.qty)}</span>` : ''}</button>`;
+        <button class="btn block" data-add style="margin-top:14px" ${pk.color_id && pk.size_id && maxQ > 0 ? '' : 'disabled'}>${icon.plus}${pk.back ? 'Put back in sale' : 'Add to sale'}${pk.color_id && pk.size_id ? ` · <span class="num">${pk.free ? 'FREE' : fmt(unitTotal * pk.qty)}</span>` : ''}</button>
+        ${pk.back ? '<button class="btn sm ghost block" data-drop style="margin-top:8px">Remove this line from the sale</button>' : ''}`;
 
       $$('[data-prod]', sh).forEach((b) => (b.onclick = () => {
         const np = productById(+b.dataset.prod);
@@ -708,14 +739,21 @@
         if (n > maxQ) return toast('low', `Only ${maxQ} left`, labelOf(pk.color_id, pk.size_id), 1800);
         pk.qty = n; renderBuilder();
       }));
+      const printPart = unitTotal - pk.unit_price;
       $('[data-unit]', sh).oninput = (e) => {
         pk.unit_price = Math.max(0, Number(e.target.value) || 0);
         const n = $('[data-add] .num', sh);
-        if (n) n.textContent = fmt((pk.unit_price + printPriceOf(prod, pk.print_type)) * pk.qty);
+        if (n) n.textContent = fmt((pk.unit_price + printPart) * pk.qty);
       };
+      $('[data-free-pick]', sh).onclick = () => { pk.free = !pk.free; renderBuilder(); };
+      const drop = $('[data-drop]', sh);
+      if (drop) drop.onclick = () => { Object.assign(pk, { id: null, back: null, size_id: null, qty: 1, print_type: 'none', free: false, unit_price: prod.price }); renderBuilder(); renderTotals(); };
       $('[data-add]', sh).onclick = () => {
-        D.items.push({ product_id: pk.product_id, color_id: pk.color_id, size_id: pk.size_id, qty: pk.qty, print_type: pk.print_type, unit_price: pk.unit_price });
-        pk.size_id = null; pk.qty = 1; pk.print_type = 'none';
+        // a saved line that comes back unchanged in color/size keeps its id (and its original names on the receipt)
+        const back = pk.back && pk.back.id && pk.color_id === pk.back.color_id && pk.size_id === pk.back.size_id ? pk.back : null;
+        D.items.push({ product_id: pk.product_id, color_id: pk.color_id, size_id: pk.size_id, qty: pk.qty, print_type: pk.print_type, unit_price: pk.unit_price, free: !!pk.free,
+          ...(back ? { id: back.id, saved_print: back.saved_print, saved_print_price: back.saved_print_price, snap: back.snap } : {}) });
+        Object.assign(pk, { id: null, back: null, size_id: null, qty: 1, print_type: 'none', free: false, unit_price: prod.price });
         renderBuilder(); renderCart(); renderTotals();
       };
     }
@@ -723,22 +761,36 @@
     function renderCart() {
       $('[data-cart]', sh).innerHTML = D.items.map((it, i) => {
         const c = colorById(it.color_id), s = sizeById(it.size_id), pr = productById(it.product_id);
-        return `<div class="cart-line"><div class="sw" style="background:${esc(c.hex)};color:${isLight(c.hex) ? '#2E2D4C' : '#fff'}">${esc(s.name === 'ONE SIZE' ? '1SZ' : s.name)}</div>
-          <div class="info"><div class="t">${it.qty} × ${esc(pr.name)} · ${esc(c.name)} ${esc(s.name)}</div><div class="s">${PRINT[it.print_type].en} · ${fmt(lineUnit(it))} each</div></div>
-          <div class="p">${fmt(lineUnit(it) * it.qty)}</div><button class="x" data-rm="${i}" aria-label="Remove">×</button></div>`;
+        const n = it.snap || { product: pr.name, color: c.name, size: s.name, hex: c.hex };
+        const canEdit = pr && !pr.archived && c && !c.archived && s && !s.archived;
+        return `<div class="cart-line ${it.free ? 'is-free' : ''}"><div class="sw" style="background:${esc(n.hex)};color:${isLight(n.hex) ? '#2E2D4C' : '#fff'}">${esc(n.size === 'ONE SIZE' ? '1SZ' : n.size)}</div>
+          <button type="button" class="info info-btn" data-edit-line="${i}" ${canEdit ? '' : 'disabled'}><div class="t">${it.qty} × ${esc(n.product)} · ${esc(n.color)} ${esc(n.size)}</div><div class="s">${PRINT[it.print_type].en} · ${it.free ? '🎁 Free gift' : fmt(lineUnit(it)) + ' each'}${canEdit ? ' · <u>change</u>' : ''}</div></button>
+          <div class="p">${it.free ? '<span class="free-tag">FREE</span>' : fmt(lineUnit(it) * it.qty)}</div><button class="x" data-rm="${i}" aria-label="Remove">×</button></div>`;
       }).join('');
       $$('[data-rm]', sh).forEach((b) => (b.onclick = () => { D.items.splice(+b.dataset.rm, 1); renderBuilder(); renderCart(); renderTotals(); }));
+      // tap a line to load it back into the picker above and change it
+      $$('[data-edit-line]', sh).forEach((b) => (b.onclick = () => {
+        if (D.pick.back) return toast('err', 'Finish the line above first', 'Tap “Put back in sale”');
+        const [it] = D.items.splice(+b.dataset.editLine, 1);
+        Object.assign(D.pick, { id: it.id || null, back: it, product_id: it.product_id, color_id: it.color_id, size_id: it.size_id,
+          qty: it.qty, print_type: it.print_type, unit_price: it.unit_price, free: !!it.free });
+        renderBuilder(); renderCart(); renderTotals();
+        $('[data-builder]', sh).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }));
     }
 
     function renderTotals() {
       const sub = D.items.reduce((t, it) => t + lineUnit(it) * it.qty, 0);
       const disc = Math.min(sub, Math.max(0, Number($('[data-discount]', sh).value) || 0));
       const pcs = D.items.reduce((t, it) => t + it.qty, 0);
+      const wrap = wrapFee();
       $('[data-totals]', sh).innerHTML = `
         <div class="line"><span>${pcs} piece${pcs === 1 ? '' : 's'}</span><span class="num">${fmt(sub)}</span></div>
         ${disc ? `<div class="line"><span>Discount</span><span class="num">−${fmt(disc)}</span></div>` : ''}
-        <div class="grand"><span>Total</span><b class="num">${fmt(sub - disc)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>`;
-      $('[data-save]', sh).disabled = !D.items.length;
+        ${wrap ? `<div class="line"><span>Gift wrap</span><span class="num">+${fmt(wrap)}</span></div>` : ''}
+        <div class="grand"><span>Total</span><b class="num">${fmt(sub - disc + wrap)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
+        ${G.on && G.hide ? '<div class="line" style="color:var(--mint)"><span>🎁 The receipt will not show prices</span></div>' : ''}`;
+      $('[data-save]', sh).disabled = !D.items.length && !D.pick.back;
     }
 
     const ci = $('[data-contact]', sh);
@@ -773,6 +825,24 @@
       if (exact) useClient(exact, false); else showClient(D.client);
     });
     if (preset.client) useClient(preset.client, true);
+    if (E) {
+      nameIn.value = E.customer_name;
+      ci.value = contactOf(E); paintContact();
+      const saved = E.client_id && (S.clients || []).find((c) => c.id === E.client_id);
+      if (saved) { D.client = saved; showClient(saved); } else if (E.client_id) D.client = { id: E.client_id, name: E.customer_name };
+    }
+    // gift section
+    $$('[data-g]', sh).forEach((inp) => (inp.oninput = inp.onchange = () => {
+      const k = inp.dataset.g;
+      G[k] = inp.type === 'checkbox' ? inp.checked : inp.value;
+      if (k === 'on') {
+        $('[data-gift-fields]', sh).hidden = !G.on;
+        $('[data-gift-box]', sh).classList.toggle('on', G.on);
+        if (G.on && !G.to) setTimeout(() => $('[data-g="to"]', sh).focus(), 50);
+      }
+      if (k === 'wrapOn') $('[data-g="wrap"]', sh).disabled = !G.wrapOn;
+      renderTotals();
+    }));
     $('[data-discount]', sh).oninput = renderTotals;
     $('[data-paid]', sh).onchange = (e) => { $('[data-paid-lbl]', sh).textContent = e.target.checked ? 'Paid' : 'Not paid yet'; };
     $('[data-save]', sh).onclick = async (e) => {
@@ -781,24 +851,32 @@
       if (!D.items.length) return toast('err', 'Add at least one item');
       const contact = parseContact(ci.value);
       if (contact.type === 'unknown') { ci.focus(); return toast('err', 'Check the contact', 'Type a phone number or an Instagram @username'); }
+      if (D.pick.back) return toast('err', 'One line is still open above', 'Tap “Put back in sale” or pick another size');
       e.target.disabled = true; e.target.textContent = 'Saving…';
       try {
-        const r = await api('/api/sales', { body: {
+        const body = {
           client_id: D.client ? D.client.id : null,
-          customer_name: name, customer_phone: contact.phone, customer_instagram: contact.instagram, items: D.items,
+          customer_name: name, customer_phone: contact.phone, customer_instagram: contact.instagram,
+          items: D.items.map((i) => ({ id: i.id, color_id: i.color_id, size_id: i.size_id, qty: i.qty, print_type: i.print_type, unit_price: i.unit_price, free: !!i.free })),
           discount: Number($('[data-discount]', sh).value) || 0, paid: $('[data-paid]', sh).checked, note: $('[data-note]', sh).value,
-        } });
+          gift: G.on, gift_to: G.to, gift_message: G.message, gift_hide_prices: G.hide, gift_wrap: wrapFee(),
+        };
+        const r = await api(E ? `/api/sales/${E.id}` : '/api/sales', { method: E ? 'PUT' : 'POST', body });
         S.data = r.state;
         S.sales = [];
         closeSheet();
         refreshClients();
-        const keys = [...new Set(D.items.map((i) => `${i.color_id}:${i.size_id}`))];
+        const keys = [...new Set([...D.items, ...(E ? E.items : [])].map((i) => `${i.color_id}:${i.size_id}`))];
         refreshView(keys);
-        announceStock(keys);
-        openSaleDone(r.sale);
+        announceStock(keys, !!E);
+        if (E) {
+          toast('ok', 'Sale updated ✓', `${invNo(E.id)} · receipt and message now show the changes`);
+          if (S.view === 'sales') reloadSales().catch(() => {});
+          preset.onSaved && preset.onSaved(r.sale);
+        } else openSaleDone(r.sale);
       } catch (err) {
         toast('err', 'Could not save', err.message);
-        e.target.disabled = false; e.target.textContent = 'Save sale & make receipt';
+        e.target.disabled = false; e.target.textContent = saveLabel;
       }
     };
 
@@ -894,15 +972,23 @@
     }
   }
 
-  const itemLine = (i) => `${i.qty} × ${i.product} ${i.color} ${i.size}${i.print_type !== 'none' ? ' (' + PRINT[i.print_type].en + ')' : ''}`;
+  const itemLine = (i, noPrices) => `${i.qty} × ${i.product} ${i.color} ${i.size}${i.print_type !== 'none' ? ' (' + PRINT[i.print_type].en + ')' : ''}${i.free && !noPrices ? ' · free 🎁' : ''}`;
+  // always built from the sale as it is now, so an edited name, item or gift shows up in the message too
   function receiptMessage(sale, link) {
+    const gift = sale.gift ? [
+      '',
+      `🎁 ${sale.gift_to ? `Gift for ${sale.gift_to} · هدية لـ ${sale.gift_to}` : 'Gift · هدية'}`,
+      ...(sale.gift_message ? [`“${sale.gift_message}”`] : []),
+    ] : [];
     return [
       `مرحبا ${sale.customer_name} 👋`,
       'Thanks for shopping at Yalla Wear! 🖤',
+      ...gift,
       '',
       `إيصالك · Your receipt ${invNo(sale.id)}`,
-      ...sale.items.map((i) => '• ' + itemLine(i)),
-      `Total: ${money(sale.total)}${sale.paid ? '' : ' (not paid yet)'}`,
+      ...sale.items.map((i) => '• ' + itemLine(i, sale.gift_hide_prices)),
+      ...(sale.gift_wrap && !sale.gift_hide_prices ? [`• Gift wrap +${fmt(sale.gift_wrap)}`] : []),
+      ...(sale.gift_hide_prices ? (sale.paid ? [] : ['(not paid yet)']) : [`Total: ${money(sale.total)}${sale.paid ? '' : ' (not paid yet)'}`]),
       ...(link ? ['', link] : []),
     ].join('\n');
   }
@@ -941,16 +1027,21 @@
         ${sale.customer_phone ? `<div class="kv"><span>WhatsApp</span><span>${esc(sale.customer_phone)}</span></div>` : ''}
         ${sale.customer_instagram ? `<div class="kv"><span>Instagram</span><span>@${esc(sale.customer_instagram)}</span></div>` : ''}
         ${sale.note ? `<div class="kv"><span>Note</span><span>${esc(sale.note)}</span></div>` : ''}
-        <div class="detail-items">${sale.items.map((it) => `<div class="cart-line"><div class="sw" style="background:${esc(it.hex)};color:${isLight(it.hex) ? '#2E2D4C' : '#fff'}">${esc(it.size === 'ONE SIZE' ? '1SZ' : it.size)}</div>
-          <div class="info"><div class="t">${it.qty} × ${esc(it.product)} · ${esc(it.color)} ${esc(it.size)}</div><div class="s">${PRINT[it.print_type].en} · ${fmt(it.unit_price + it.print_price)} each</div></div><div class="p">${fmt(it.line_total)}</div></div>`).join('')}</div>
+        ${sale.gift ? `<div class="gift-card"><div class="gc-h">🎁 Gift${sale.gift_to ? ` for <b dir="auto">${esc(sale.gift_to)}</b>` : ''}${sale.gift_hide_prices ? '<span class="pill new">No prices on receipt</span>' : ''}</div>
+          ${sale.gift_message ? `<div class="gc-m" dir="auto">“${esc(sale.gift_message)}”</div>` : ''}</div>` : ''}
+        <div class="detail-items">${sale.items.map((it) => `<div class="cart-line ${it.free ? 'is-free' : ''}"><div class="sw" style="background:${esc(it.hex)};color:${isLight(it.hex) ? '#2E2D4C' : '#fff'}">${esc(it.size === 'ONE SIZE' ? '1SZ' : it.size)}</div>
+          <div class="info"><div class="t">${it.qty} × ${esc(it.product)} · ${esc(it.color)} ${esc(it.size)}</div><div class="s">${PRINT[it.print_type].en} · ${it.free ? '🎁 Free gift' : fmt(it.unit_price + it.print_price) + ' each'}</div></div><div class="p">${it.free ? '<span class="free-tag">FREE</span>' : fmt(it.line_total)}</div></div>`).join('')}</div>
         <div class="totals">
-          ${sale.discount ? `<div class="line"><span>Subtotal</span><span class="num">${fmt(sale.subtotal)}</span></div><div class="line"><span>Discount</span><span class="num">−${fmt(sale.discount)}</span></div>` : ''}
+          ${sale.discount || sale.gift_wrap ? `<div class="line"><span>Subtotal</span><span class="num">${fmt(sale.subtotal)}</span></div>` : ''}
+          ${sale.discount ? `<div class="line"><span>Discount</span><span class="num">−${fmt(sale.discount)}</span></div>` : ''}
+          ${sale.gift_wrap ? `<div class="line"><span>Gift wrap</span><span class="num">+${fmt(sale.gift_wrap)}</span></div>` : ''}
           <div class="grand"><span>Total</span><b class="num" ${cancelled ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${fmt(sale.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
         </div>
         ${cancelled ? `<p class="muted" style="font-size:13px">Cancelled ${dateFmt(sale.cancelled_at)} by ${esc(sale.cancelled_by)} — the pieces went back to stock.</p>
         <button class="btn block" data-restore-sale>${icon.undo}Undo cancel — bring this sale back</button>` : `
         <div class="receipt-preview hidden" data-prev></div>
         ${receiptButtons(sale)}
+        <button class="btn block" data-edit-sale style="margin-top:10px">${icon.edit}Edit sale (name, items, prices, gift…)</button>
         <div class="actions-grid">
           <button class="btn" data-toggle-paid>${sale.paid ? 'Mark as not paid' : 'Mark as paid ✓'}</button>
           <button class="btn danger" data-cancel>Cancel sale</button>
@@ -962,6 +1053,10 @@
         return;
       }
       wireReceiptButtons(sh, sale);
+      $('[data-edit-sale]', sh).onclick = async () => {
+        if (!S.clients) await loadClients().catch(() => {});
+        openNewSale({ edit: sale, onSaved: (fresh) => { sale = fresh; if (sh.isConnected) paint(); renderShell(); } });
+      };
       $('[data-toggle-paid]', sh).onclick = (e) => busy(e.currentTarget, async () => {
         const want = !sale.paid;
         try {
@@ -1035,7 +1130,7 @@
       const state = s.cancelled_at ? '<span class="pill cancelled">Cancelled</span>' : s.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>';
       return `<button class="sale ${s.cancelled_at ? 'is-cancelled' : s.paid ? '' : 'is-unpaid'}" data-id="${s.id}">
         <div class="main">
-          <div class="top"><span class="inv">${invNo(s.id)}</span><span class="who" dir="auto">${esc(s.customer_name)}</span>${state}</div>
+          <div class="top"><span class="inv">${invNo(s.id)}</span><span class="who" dir="auto">${esc(s.customer_name)}</span>${state}${s.gift ? '<span class="pill gift" title="Gift">🎁</span>' : ''}</div>
           <div class="items">${s.items.map((i) => `<span class="mini ${i.print_type !== 'none' ? 'print' : ''}"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)}${i.print_type === 'front' ? ' · F' : i.print_type === 'front_back' ? ' · F+B' : ''}</span>`).join('')}</div>
           <div class="when">${dateFmt(s.created_at)} · ${esc(s.created_by)}${contactOf(s) ? ` · <span style="white-space:nowrap">${esc(contactOf(s))}</span>` : ''}</div>
         </div>
@@ -1169,19 +1264,25 @@
         <div class="contact-input"><span class="ci-icon ${c && c.instagram ? 'instagram' : ''}">${icon.ig}</span>
         <input class="input" data-f="instagram" placeholder="@username" value="${esc(c && c.instagram ? '@' + c.instagram : '')}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" /></div></div>
       <div class="field"><label>Note (size, address, likes…)</label><input class="input" data-f="note" placeholder="Optional" value="${esc(c ? c.note : '')}" /></div>
+      ${editing && c.orders ? `<label class="switch rename-sales" data-rename-row hidden style="margin-bottom:12px"><span>Also change the name on their ${c.orders} past receipt${c.orders === 1 ? '' : 's'}</span><input type="checkbox" data-rename-sales checked /></label>` : ''}
       <button class="btn primary block" data-save>${editing ? 'Save changes' : 'Save client'}</button>`);
     const f = (k) => $(`[data-f="${k}"]`, sh);
+    const renameRow = $('[data-rename-row]', sh);
+    if (renameRow) f('name').addEventListener('input', () => { renameRow.hidden = f('name').value.trim() === c.name; });
     f('phone').oninput = (e) => { e.target.previousElementSibling.className = 'ci-icon ' + (isPhone(e.target.value) ? 'phone' : ''); };
     f('instagram').oninput = (e) => { e.target.previousElementSibling.className = 'ci-icon ' + (e.target.value.trim() ? 'instagram' : ''); };
     if (!editing && matchMedia('(hover: hover)').matches) setTimeout(() => f('name').focus(), 250);
     $('[data-save]', sh).onclick = (e) => busy(e.currentTarget, async () => {
-      const body = { name: f('name').value, phone: f('phone').value.trim(), instagram: f('instagram').value, note: f('note').value };
+      const body = { name: f('name').value, phone: f('phone').value.trim(), instagram: f('instagram').value, note: f('note').value,
+        update_sales: !!(renameRow && !renameRow.hidden && $('[data-rename-sales]', sh).checked) };
       if (!body.name.trim()) { f('name').focus(); return toast('err', 'Client name is missing'); }
       if (body.phone && !isPhone(body.phone)) { f('phone').focus(); return toast('err', 'Check the number', 'Digits only, like 0944 123 456'); }
       try {
         const r = await api(editing ? `/api/clients/${c.id}` : '/api/clients', { method: editing ? 'PUT' : 'POST', body });
         closeSheet(); await refreshClients();
-        toast('ok', editing ? 'Client saved' : 'Client added', r.client.name);
+        const n = (r.updated_sales || []).length;
+        toast('ok', editing ? 'Client saved' : 'Client added', n ? `${r.client.name} · name changed on ${n} receipt${n === 1 ? '' : 's'}` : r.client.name);
+        if (n) { S.sales = []; remakeReceipts(r.updated_sales); }
         onSaved && onSaved(r.client);
       } catch (err) { toast('err', 'Could not save', err.message); }
     });
@@ -1262,6 +1363,7 @@
         <div class="field" style="flex:0 0 96px"><label>Currency</label><input class="input" data-k="currency" value="${esc(st.currency)}" /></div>
         <div class="field"><label>Thank-you line</label><input class="input" data-k="receipt_note" value="${esc(st.receipt_note)}" /></div>
       </div>
+      <div class="field"><label>Gift wrap price (${esc(cur())}) — filled in when you turn on gift wrap</label><input class="input num" type="number" min="0" inputmode="numeric" data-k="gift_wrap_price" value="${esc(st.gift_wrap_price || 0)}" /></div>
       <div class="field"><label>Custom receipt logo (optional — Yalla Wear logo is used by default)</label>
         <div class="row" style="align-items:center">
           <div class="brand-mark" data-logo-prev style="flex:0 0 auto;width:56px;height:56px"><img src="${esc(st.logo || '/brand/mark.png')}" alt=""></div>
@@ -1317,8 +1419,12 @@
     const st = S.data.settings;
     const logo = st.logo ? `<img class="custom" src="${esc(st.logo)}" alt="">` : '<img src="/brand/logo-lockup.png" alt="Yalla Wear">';
     const pcs = sale.items.reduce((t, i) => t + i.qty, 0);
-    const first = esc(String(sale.customer_name).trim().split(/\s+/)[0] || sale.customer_name);
+    const firstOf = (n) => esc(String(n).trim().split(/\s+/)[0] || n);
+    // a gift greets the person receiving it
+    const first = firstOf(sale.gift && sale.gift_to ? sale.gift_to : sale.customer_name);
     const contacts = [st.shop_instagram, st.shop_phone].filter(Boolean).map(esc).join(' · ');
+    const gift = sale.gift ? `<div class="rcv-gift"><div class="gl">🎁 A GIFT${sale.gift_to ? ` FROM <b dir="auto">${firstOf(sale.customer_name)}</b>` : ''}<span class="ar">هدية</span></div>
+      ${sale.gift_message ? `<div class="gm" dir="auto">${esc(sale.gift_message)}</div>` : ''}</div>` : '';
     return `<div class="rcv">
       <div class="rcv-glow"></div>
       <img class="rcv-bg" src="/brand/mark.png" alt="">
@@ -1334,7 +1440,7 @@
         <div class="rcv-rule"></div>
         <div class="rcv-hello">Hello <b dir="auto">${first}</b>,</div>
         <div class="rcv-hello-ar">مرحبا <b dir="auto">${first}</b></div>
-        <div class="rcv-ready"><i class="ck"></i><span>YOUR ORDER IS READY</span><span class="sep"></span><span class="ar">طلبك جاهز</span></div>
+        ${gift || '<div class="rcv-ready"><i class="ck"></i><span>YOUR ORDER IS READY</span><span class="sep"></span><span class="ar">طلبك جاهز</span></div>'}
       </div>
       <div class="rcv-stats">
         <div class="rcv-box"><div class="k"><span>Order</span><span class="ar">الطلب</span></div><div class="v">${invNo(sale.id)}</div></div>
@@ -1352,20 +1458,24 @@
     const c = esc(cur());
     const logo = st.logo ? `<img class="custom" src="${esc(st.logo)}" alt="">` : '<img class="lockup" src="/brand/logo-lockup.png" alt="Yalla Wear">';
     const pcs = sale.items.reduce((t, i) => t + i.qty, 0);
-    return `<div class="rc">
+    const noPrices = !!sale.gift_hide_prices;
+    const title = sale.title || (noPrices ? ['GIFT RECEIPT', 'إيصال هدية'] : ['RECEIPT', 'إيصال بيع']);
+    return `<div class="rc ${noPrices ? 'no-prices' : ''}">
       <div class="rc-head">
         <div class="rc-logo">${logo}</div>
-        <div class="rc-title"><div class="en">RECEIPT</div><div class="ar">إيصال بيع</div></div>
+        <div class="rc-title"><div class="en">${title[0]}</div><div class="ar">${title[1]}</div></div>
       </div>
       <div class="rc-meta">
-        <div class="rc-box"><div class="k"><span>Invoice</span><span class="ar">رقم الفاتورة</span></div><div class="v">${invNo(sale.id)}</div></div>
+        <div class="rc-box"><div class="k"><span>Invoice</span><span class="ar">رقم الفاتورة</span></div><div class="v">${sale.invoice_no || invNo(sale.id)}</div></div>
         <div class="rc-box"><div class="k"><span>Date</span><span class="ar">التاريخ</span></div><div class="v">${dateOnly(sale.created_at)}</div></div>
-        <div class="rc-box"><div class="k"><span>Client</span><span class="ar">الزبون</span></div><div class="v" dir="auto">${esc(sale.customer_name)}</div>${contactOf(sale) ? `<div class="v2">${esc(contactOf(sale))}</div>` : ''}</div>
+        ${sale.gift && sale.gift_to
+    ? `<div class="rc-box"><div class="k"><span>Gift for</span><span class="ar">هدية لـ</span></div><div class="v" dir="auto">${esc(sale.gift_to)}</div><div class="v2" dir="auto">from ${esc(sale.customer_name)}</div></div>`
+    : `<div class="rc-box"><div class="k"><span>${sale.client_label || 'Client'}</span><span class="ar">${sale.client_label_ar || 'الزبون'}</span></div><div class="v" dir="auto">${esc(sale.customer_name)}</div>${contactOf(sale) ? `<div class="v2">${esc(contactOf(sale))}</div>` : ''}</div>`}
       </div>
       <table class="rc-table">
         <thead><tr>
           <th>Item<span class="ar">المنتج</span></th><th class="c">Qty<span class="ar">العدد</span></th>
-          <th class="r">Price<span class="ar">السعر</span></th><th class="r">Total<span class="ar">المجموع</span></th>
+          ${noPrices ? '' : '<th class="r">Price<span class="ar">السعر</span></th><th class="r">Total<span class="ar">المجموع</span></th>'}
         </tr></thead>
         <tbody>${sale.items.map((it) => `<tr>
           <td><div class="rc-item"><i class="sw" style="background:${esc(it.hex)}"></i><div>
@@ -1373,18 +1483,23 @@
             <div class="s"><span class="ar">${esc(it.product_ar || it.product)} ${esc(it.color_ar || it.color)} · ${esc(it.size)}</span>${it.print_type !== 'none' ? ` &nbsp;·&nbsp; <span class="pr">${PRINT[it.print_type].en} / <span class="ar">${PRINT[it.print_type].ar}</span></span>` : ''}</div>
           </div></div></td>
           <td class="c">${it.qty}</td>
-          <td class="r">${fmt(it.unit_price + it.print_price)}</td>
-          <td class="r"><b>${fmt(it.line_total)}</b></td>
+          ${noPrices ? '' : it.free ? '<td class="r" colspan="2"><span class="rc-free">FREE · <span class="ar">هدية مجانية</span></span></td>' : `<td class="r">${fmt(it.unit_price + it.print_price)}</td>
+          <td class="r"><b>${fmt(it.line_total)}</b></td>`}
         </tr>`).join('')}</tbody>
       </table>
-      <div class="rc-sum">
-        <div class="rc-stamp ${sale.paid ? '' : 'unpaid'}">${sale.paid ? 'PAID' : 'NOT PAID'}<span class="ar">${sale.paid ? 'مدفوع' : 'غير مدفوع'}</span></div>
+      ${noPrices ? `<div class="rc-sum">
+        <div class="rc-stamp gift">GIFT<span class="ar">هدية</span></div>
+        <div class="rc-gift-sum">${pcs} piece${pcs === 1 ? '' : 's'} · <span class="ar">${pcs} قطع</span>${sale.gift_wrap ? '<br>Gift wrapped · <span class="ar">مغلفة كهدية</span>' : ''}</div>
+      </div>` : `<div class="rc-sum">
+        <div class="rc-stamp ${sale.paid ? '' : 'unpaid'}">${sale.stamp ? sale.stamp[0] : sale.paid ? 'PAID' : 'NOT PAID'}<span class="ar">${sale.stamp ? sale.stamp[1] : sale.paid ? 'مدفوع' : 'غير مدفوع'}</span></div>
         <div class="rc-totals">
           <div class="ln"><span>${pcs} piece${pcs === 1 ? '' : 's'} · <span class="ar">قطع</span></span><span>${fmt(sale.subtotal)} ${c}</span></div>
           ${sale.discount ? `<div class="ln"><span>Discount · <span class="ar">خصم</span></span><span>−${fmt(sale.discount)} ${c}</span></div>` : ''}
+          ${sale.gift_wrap ? `<div class="ln"><span>Gift wrap · <span class="ar">تغليف هدية</span></span><span>+${fmt(sale.gift_wrap)} ${c}</span></div>` : ''}
           <div class="gr"><div class="lbl">TOTAL<span class="ar">المجموع النهائي</span></div><div class="val">${fmt(sale.total)}<small>${c}</small></div></div>
         </div>
-      </div>
+      </div>`}
+      ${sale.gift && sale.gift_message ? `<div class="rc-note rc-gift-msg" dir="auto">🎁 ${esc(sale.gift_message)}</div>` : ''}
       ${sale.note ? `<div class="rc-note">${esc(sale.note)}</div>` : ''}
       <div class="rc-foot">
         <div class="thanks">${esc(st.receipt_note)}<span class="ar">شكراً لاختيارك يلا وير 🖤</span></div>
@@ -1393,8 +1508,25 @@
     </div>`;
   }
 
-  async function getPdf(sale) {
-    const key = `${sale.id}:${sale.paid}:${sale.cancelled_at || ''}`;
+  // one receipt is drawn at a time (they share the hidden stage)
+  let pdfQueue = Promise.resolve();
+  function getPdf(sale) {
+    const run = pdfQueue.then(() => makePdf(sale));
+    pdfQueue = run.catch(() => {});
+    return run;
+  }
+  // re-draws and re-uploads receipts in the background (after a client rename), so their links show the new name
+  async function remakeReceipts(ids) {
+    for (const id of ids.slice(0, 30)) {
+      try {
+        const { sale } = await api(`/api/sales/${id}`);
+        if (sale.receipt_path && !sale.cancelled_at) await getPdf(sale);
+      } catch { /* the receipt is made again next time it is opened */ }
+    }
+  }
+  async function makePdf(sale) {
+    // updated_at changes on every edit, so an edited sale always gets a fresh PDF, image and link preview
+    const key = `${sale.id}:${sale.updated_at || ''}:${sale.paid}:${sale.cancelled_at || ''}`;
     if (S.pdfCache.has(key)) return S.pdfCache.get(key);
     const stage = $('#receipt-stage');
     stage.innerHTML = coverHTML(sale) + receiptHTML(sale);

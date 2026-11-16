@@ -652,3 +652,33 @@ body::after { width: 54vmax; height: 54vmax; left: -24vmax; bottom: -24vmax; bac
   .client .amt b { font-size: 21px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* ---------- gifts ---------- */
+.gift-box { border-radius: 14px; border: 1px dashed transparent; margin-bottom: 14px; transition: border-color .15s, background .15s; }
+.gift-box.on { border-color: rgba(192, 219, 198, .45); background: rgba(192, 219, 198, .05); padding: 10px; }
+.gift-switch small { font-size: 13px; color: var(--muted); margin-left: 4px; }
+.gift-fields { margin-top: 12px; }
+textarea.input { resize: vertical; min-height: 64px; line-height: 1.45; }
+.free-chip { height: 48px; }
+.free-chip.on { color: var(--mint); }
+.free-tag { font-family: var(--display); font-size: 18px; letter-spacing: 1px; color: var(--mint); }
+.cart-line.is-free { border-color: rgba(192, 219, 198, .35); }
+.cart-line .info-btn { border: 0; background: transparent; text-align: left; padding: 0; color: inherit; }
+.cart-line .info-btn u { color: var(--mint); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.cart-line .info-btn:disabled { cursor: default; }
+.gift-card { border: 1px dashed rgba(192, 219, 198, .45); background: rgba(192, 219, 198, .06); border-radius: 14px; padding: 12px 14px; margin: 4px 0 12px; }
+.gift-card .gc-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+.gift-card .gc-m { margin-top: 6px; color: var(--muted); font-size: 14px; white-space: pre-line; }
+.pill.gift { background: var(--mint-soft); padding: 2px 6px; }
+/* gift on the PDF */
+.rcv-gift { margin-top: 30px; border: 2px dashed rgba(192,219,198,.55); background: rgba(192,219,198,.08); border-radius: 22px; padding: 16px 28px 18px; max-width: 520px; }
+.rcv-gift .gl { font-family: 'Bebas', sans-serif; font-size: 28px; letter-spacing: 2px; color: #C0DBC6; line-height: 1.1; display: flex; gap: 12px; align-items: center; justify-content: center; }
+.rcv-gift .gl b { color: #F2F5F1; font-weight: 400; }
+.rcv-gift .gl .ar { font-family: 'Cairo', sans-serif; font-weight: 800; font-size: 20px; letter-spacing: 0; }
+.rcv-gift .gm { font-size: 20px; line-height: 1.5; color: #F2F5F1; margin-top: 8px; white-space: pre-line; }
+.rc-free { font-family: 'Bebas', sans-serif; font-size: 20px; letter-spacing: 1.5px; color: #C0DBC6; }
+.rc-free .ar { font-family: 'Cairo', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 0; }
+.rc-stamp.gift { border-color: #C0DBC6; color: #C0DBC6; }
+.rc-gift-sum { font-size: 15px; color: #ABAACB; text-align: right; line-height: 1.7; }
+.rc-gift-sum .ar { font-family: 'Cairo', sans-serif; }
+.rc-gift-msg { font-size: 15px; color: #F2F5F1; border: 1px dashed rgba(192,219,198,.45); white-space: pre-line; }

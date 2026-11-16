@@ -128,6 +128,24 @@ if (!db.prepare("SELECT 1 FROM settings WHERE key = 'clients_seeded'").get()) {
   })();
 }
 
+// ---------- gifts + editable sales ----------
+// A sale can be a gift: who it's for, a message, a gift receipt without prices, and a wrapping fee.
+// Single lines can be free (giveaways). updated_at changes on every edit so the receipt PDF is made again.
+const addColumn = (table, col, def) => {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+};
+addColumn('sales', 'gift', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('sales', 'gift_to', "TEXT NOT NULL DEFAULT ''");
+addColumn('sales', 'gift_message', "TEXT NOT NULL DEFAULT ''");
+addColumn('sales', 'gift_hide_prices', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('sales', 'gift_wrap', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('sales', 'updated_at', 'TEXT');
+addColumn('sale_items', 'free', 'INTEGER NOT NULL DEFAULT 0');
+// wholesale: a price for shops buying in bulk and the least pieces per order (0 = not sold wholesale)
+addColumn('products', 'wholesale_price', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('products', 'wholesale_min', 'INTEGER NOT NULL DEFAULT 1');
+insertSetting.run('gift_wrap_price', '0');
+
 // ---------- helpers ----------
 const getSettings = () => Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value]));
 const int = (v, def = 0) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? n : def; };
@@ -243,7 +261,7 @@ function monthStartISO() {
 function saleWithItems(id) {
   const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(id);
   if (!sale) return null;
-  sale.items = db.prepare(`SELECT id, product_id, color_id, size_id, qty, unit_price, print_type, print_price, line_total,
+  sale.items = db.prepare(`SELECT id, product_id, color_id, size_id, qty, unit_price, print_type, print_price, line_total, free,
       product_name product, product_name_ar product_ar, color_name color, color_name_ar color_ar, color_hex hex, size_name size
     FROM sale_items WHERE sale_id = ? ORDER BY id`).all(id);
   sale.invoice_no = 'YW-' + String(sale.id).padStart(4, '0');
@@ -354,50 +372,153 @@ app.post('/api/products/:id/archive', auth, (req, res, next) => {
 });
 
 // ---- sales ----
+// A product line as it is right now (name, prices, stock) — used for new lines in a sale or a wholesale order.
+function liveLine(colorId, sizeId) {
+  const v = db.prepare(`SELECT st.qty have, c.id color_id, c.name color, c.name_ar color_ar, c.hex, c.archived ca,
+      s.id size_id, s.name size, s.archived sa, s.product_id s_pid,
+      p.id product_id, p.name product, p.name_ar product_ar, p.price, p.printable, p.print_front, p.print_front_back, p.archived pa,
+      p.wholesale_price, p.wholesale_min
+    FROM stock st JOIN colors c ON c.id = st.color_id JOIN sizes s ON s.id = st.size_id JOIN products p ON p.id = c.product_id
+    WHERE st.color_id = ? AND st.size_id = ?`).get(int(colorId), int(sizeId));
+  if (!v || v.s_pid !== v.product_id || v.ca || v.sa || v.pa) throw new HttpError(400, 'That item is not available any more — refresh');
+  return v;
+}
+const printPriceFor = (p, type) => (type === 'front' ? p.print_front : type === 'front_back' ? p.print_front_back : 0);
+const cleanPrint = (printable, type) => (printable && ['front', 'front_back'].includes(type) ? type : 'none');
+const str = (v, max) => String(v ?? '').trim().slice(0, max);
+
+function giftFields(b) {
+  const gift = b.gift ? 1 : 0;
+  return {
+    gift,
+    gift_to: gift ? str(b.gift_to, 60) : '',
+    gift_message: gift ? str(b.gift_message, 300) : '',
+    gift_hide_prices: gift && b.gift_hide_prices ? 1 : 0,
+    gift_wrap: gift ? Math.max(0, int(b.gift_wrap)) : 0,
+  };
+}
+
+// Builds the lines of a sale. Lines with an id are kept from the saved sale (their names stay as they were);
+// lines without an id are new and read the product as it is now. Free lines cost 0.
+function buildSaleLines(rawItems, oldItems = []) {
+  if (!Array.isArray(rawItems) || rawItems.length === 0) throw new HttpError(400, 'Add at least one item');
+  return rawItems.map((it) => {
+    const qty = int(it.qty);
+    if (qty <= 0) throw new HttpError(400, 'Quantity must be at least 1');
+    const free = it.free ? 1 : 0;
+    const old = it.id ? oldItems.find((o) => o.id === int(it.id)) : null;
+    if (it.id && !old) throw new HttpError(400, 'That line is not in this sale any more — refresh');
+    let line;
+    if (old) {
+      const p = db.prepare('SELECT printable, print_front, print_front_back FROM products WHERE id = ?').get(old.product_id) || { printable: 0 };
+      const printType = it.print_type == null ? old.print_type : (it.print_type === old.print_type ? old.print_type : cleanPrint(p.printable, it.print_type));
+      line = {
+        id: old.id, product_id: old.product_id, color_id: old.color_id, size_id: old.size_id,
+        product: old.product_name, product_ar: old.product_name_ar, color: old.color_name, color_ar: old.color_name_ar, hex: old.color_hex, size: old.size_name,
+        printType, printPrice: printType === old.print_type ? old.print_price : printPriceFor(p, printType),
+        unit: it.unit_price == null || it.unit_price === '' ? old.unit_price : int(it.unit_price),
+      };
+    } else {
+      const v = liveLine(it.color_id, it.size_id);
+      const printType = cleanPrint(v.printable, it.print_type);
+      line = { ...v, printType, printPrice: printPriceFor(v, printType), unit: it.unit_price == null || it.unit_price === '' ? v.price : int(it.unit_price) };
+    }
+    if (line.unit < 0) throw new HttpError(400, 'Price cannot be negative');
+    if (free) { line.unit = 0; line.printPrice = 0; }
+    return { ...line, qty, free, label: `${line.product} ${line.color} ${line.size}` };
+  });
+}
+
+// Takes pieces out of (or puts them back into) stock for a sale: change = { "color:size": pieces needed (+) or freed (−) }.
+function moveSaleStock(change, saleId, user, now, note = '') {
+  for (const [key, d] of Object.entries(change)) {
+    if (d <= 0) continue;
+    const [c, s] = key.split(':').map(Number);
+    const row = db.prepare('SELECT qty FROM stock WHERE color_id = ? AND size_id = ?').get(c, s);
+    if (!row || row.qty < d) {
+      const n = db.prepare('SELECT p.name || \' \' || c.name || \' \' || s.name label FROM colors c JOIN sizes s ON s.id = ? JOIN products p ON p.id = c.product_id WHERE c.id = ?').get(s, c);
+      throw new HttpError(409, `Not enough ${n ? n.label : 'stock'} — only ${row ? row.qty : 0} left`);
+    }
+  }
+  for (const [key, d] of Object.entries(change)) {
+    if (!d) continue;
+    const [c, s] = key.split(':').map(Number);
+    db.prepare('UPDATE stock SET qty = qty - ? WHERE color_id = ? AND size_id = ?').run(d, c, s);
+    db.prepare(`INSERT INTO movements (created_at,created_by,color_id,size_id,delta,reason,sale_id,note) VALUES (?,?,?,?,?,?,?,?)`)
+      .run(now, user, c, s, -d, d > 0 ? 'sale' : 'cancel', saleId, note);
+  }
+}
+const piecesByKey = (lines, sign = 1, into = {}) => {
+  for (const l of lines) { const k = `${l.color_id}:${l.size_id}`; into[k] = (into[k] || 0) + sign * l.qty; }
+  return into;
+};
+const saleMoney = (lines, b, gift) => {
+  const subtotal = lines.reduce((a, l) => a + (l.unit + l.printPrice) * l.qty, 0);
+  const discount = Math.max(0, Math.min(int(b.discount), subtotal));
+  return { subtotal, discount, total: subtotal - discount + gift.gift_wrap };
+};
+const insertSaleLine = (saleId, l) => db.prepare(`INSERT INTO sale_items (sale_id,product_id,color_id,size_id,product_name,product_name_ar,color_name,color_name_ar,color_hex,size_name,
+    qty,unit_price,print_type,print_price,line_total,free) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+  .run(saleId, l.product_id, l.color_id, l.size_id, l.product, l.product_ar, l.color, l.color_ar, l.hex, l.size,
+    l.qty, l.unit, l.printType, l.printPrice, (l.unit + l.printPrice) * l.qty, l.free);
+
 app.post('/api/sales', auth, (req, res, next) => {
   try {
     const b = req.body || {};
-    const customer = String(b.customer_name || '').trim().slice(0, 60);
+    const customer = str(b.customer_name, 60);
     if (!customer) throw new HttpError(400, 'Client name is required');
-    if (!Array.isArray(b.items) || b.items.length === 0) throw new HttpError(400, 'Add at least one item');
-
     const id = db.transaction(() => {
-      const items = b.items.map((it) => {
-        const qty = int(it.qty);
-        if (qty <= 0) throw new HttpError(400, 'Quantity must be at least 1');
-        const v = db.prepare(`SELECT st.qty have, c.id color_id, c.name color, c.name_ar color_ar, c.hex, c.archived ca,
-            s.id size_id, s.name size, s.archived sa, s.product_id s_pid,
-            p.id product_id, p.name product, p.name_ar product_ar, p.price, p.printable, p.print_front, p.print_front_back, p.archived pa
-          FROM stock st JOIN colors c ON c.id = st.color_id JOIN sizes s ON s.id = st.size_id JOIN products p ON p.id = c.product_id
-          WHERE st.color_id = ? AND st.size_id = ?`).get(int(it.color_id), int(it.size_id));
-        if (!v || v.s_pid !== v.product_id || v.ca || v.sa || v.pa) throw new HttpError(400, 'That item is not available any more — refresh');
-        const printType = v.printable && ['front', 'front_back'].includes(it.print_type) ? it.print_type : 'none';
-        const printPrice = printType === 'front' ? v.print_front : printType === 'front_back' ? v.print_front_back : 0;
-        const unit = it.unit_price == null || it.unit_price === '' ? v.price : int(it.unit_price);
-        if (unit < 0) throw new HttpError(400, 'Price cannot be negative');
-        return { ...v, qty, unit, printType, printPrice, label: `${v.product} ${v.color} ${v.size}` };
-      });
-      const demand = {};
-      for (const it of items) demand[`${it.color_id}:${it.size_id}`] = (demand[`${it.color_id}:${it.size_id}`] || 0) + it.qty;
-      for (const it of items) if (demand[`${it.color_id}:${it.size_id}`] > it.have) throw new HttpError(409, `Not enough ${it.label} — only ${it.have} left`);
-      const subtotal = items.reduce((a, it) => a + (it.unit + it.printPrice) * it.qty, 0);
-      const discount = Math.max(0, Math.min(int(b.discount), subtotal));
+      const lines = buildSaleLines(b.items);
+      const gift = giftFields(b);
+      const m = saleMoney(lines, b, gift);
       const now = nowISO();
-      const phone = String(b.customer_phone || '').trim().slice(0, 30), instagram = cleanInstagram(b.customer_instagram);
+      const phone = str(b.customer_phone, 30), instagram = cleanInstagram(b.customer_instagram);
       const clientId = saveClientFromSale(b.client_id, customer, phone, instagram, req.user, now);
-      const saleId = db.prepare(`INSERT INTO sales (created_at, created_by, customer_name, customer_phone, customer_instagram, subtotal, discount, total, paid, note, client_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(now, req.user, customer, phone, instagram,
-        subtotal, discount, subtotal - discount, b.paid === false ? 0 : 1, String(b.note || '').trim().slice(0, 300), clientId).lastInsertRowid;
-      for (const it of items) {
-        db.prepare(`INSERT INTO sale_items (sale_id,product_id,color_id,size_id,product_name,product_name_ar,color_name,color_name_ar,color_hex,size_name,
-            qty,unit_price,print_type,print_price,line_total) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-          .run(saleId, it.product_id, it.color_id, it.size_id, it.product, it.product_ar, it.color, it.color_ar, it.hex, it.size,
-            it.qty, it.unit, it.printType, it.printPrice, (it.unit + it.printPrice) * it.qty);
-        db.prepare('UPDATE stock SET qty = qty - ? WHERE color_id = ? AND size_id = ?').run(it.qty, it.color_id, it.size_id);
-        db.prepare(`INSERT INTO movements (created_at,created_by,color_id,size_id,delta,reason,sale_id) VALUES (?,?,?,?,?,'sale',?)`)
-          .run(now, req.user, it.color_id, it.size_id, -it.qty, saleId);
-      }
+      const saleId = db.prepare(`INSERT INTO sales (created_at, created_by, customer_name, customer_phone, customer_instagram, subtotal, discount, total, paid, note, client_id,
+          gift, gift_to, gift_message, gift_hide_prices, gift_wrap, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(now, req.user, customer, phone, instagram,
+        m.subtotal, m.discount, m.total, b.paid === false ? 0 : 1, str(b.note, 300), clientId,
+        gift.gift, gift.gift_to, gift.gift_message, gift.gift_hide_prices, gift.gift_wrap, now).lastInsertRowid;
+      moveSaleStock(piecesByKey(lines), saleId, req.user, now);
+      for (const l of lines) insertSaleLine(saleId, l);
       return saleId;
+    })();
+    res.json({ sale: saleWithItems(id), state: buildState() });
+  } catch (e) { next(e); }
+});
+
+// Edit a saved sale: client, contact, lines (qty, price, free, print, add, remove), discount, gift, note, paid.
+// Stock follows the change, and the receipt is made again with the new details.
+app.put('/api/sales/:id', auth, (req, res, next) => {
+  try {
+    const id = int(req.params.id);
+    const b = req.body || {};
+    const customer = str(b.customer_name, 60);
+    if (!customer) throw new HttpError(400, 'Client name is required');
+    db.transaction(() => {
+      const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(id);
+      if (!sale) throw new HttpError(404, 'Sale not found');
+      if (sale.cancelled_at) throw new HttpError(409, 'This sale is cancelled — bring it back first to edit it');
+      const oldItems = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(id);
+      const lines = buildSaleLines(b.items, oldItems);
+      const gift = giftFields(b);
+      const m = saleMoney(lines, b, gift);
+      const now = nowISO();
+      moveSaleStock(piecesByKey(oldItems, -1, piecesByKey(lines)), id, req.user, now, 'Sale edited');
+      const keep = new Set(lines.filter((l) => l.id).map((l) => l.id));
+      for (const o of oldItems) if (!keep.has(o.id)) db.prepare('DELETE FROM sale_items WHERE id = ?').run(o.id);
+      for (const l of lines) {
+        if (l.id) {
+          db.prepare('UPDATE sale_items SET qty=?, unit_price=?, print_type=?, print_price=?, line_total=?, free=? WHERE id=?')
+            .run(l.qty, l.unit, l.printType, l.printPrice, (l.unit + l.printPrice) * l.qty, l.free, l.id);
+        } else insertSaleLine(id, l);
+      }
+      const phone = str(b.customer_phone, 30), instagram = cleanInstagram(b.customer_instagram);
+      const clientId = saveClientFromSale(b.client_id, customer, phone, instagram, req.user, now);
+      db.prepare(`UPDATE sales SET customer_name=?, customer_phone=?, customer_instagram=?, client_id=?, subtotal=?, discount=?, total=?,
+          paid=?, note=?, gift=?, gift_to=?, gift_message=?, gift_hide_prices=?, gift_wrap=?, updated_at=? WHERE id=?`)
+        .run(customer, phone, instagram, clientId, m.subtotal, m.discount, m.total, b.paid === false ? 0 : 1, str(b.note, 300),
+          gift.gift, gift.gift_to, gift.gift_message, gift.gift_hide_prices, gift.gift_wrap, now, id);
     })();
     res.json({ sale: saleWithItems(id), state: buildState() });
   } catch (e) { next(e); }
@@ -475,7 +596,7 @@ app.post('/api/sales/:id/restore', auth, (req, res, next) => {
 
 app.post('/api/sales/:id/paid', auth, (req, res) => {
   const id = int(req.params.id);
-  const r = db.prepare('UPDATE sales SET paid = ? WHERE id = ?').run(req.body.paid ? 1 : 0, id);
+  const r = db.prepare('UPDATE sales SET paid = ?, updated_at = ? WHERE id = ?').run(req.body.paid ? 1 : 0, nowISO(), id);
   if (!r.changes) return res.status(404).json({ error: 'Sale not found' });
   res.json({ sale: saleWithItems(id), state: buildState() });
 });
@@ -639,9 +760,18 @@ app.put('/api/clients/:id', auth, (req, res, next) => {
     const f = clientFields(req.body || {});
     const clash = findClientByName(f.name);
     if (clash && clash.id !== id) throw new HttpError(409, `${clash.name} is already in your clients`);
-    db.prepare('UPDATE clients SET name = ?, phone = ?, instagram = ?, note = ?, updated_at = ? WHERE id = ?')
-      .run(f.name, f.phone, f.instagram, f.note, nowISO(), id);
-    res.json({ client: clientById(id) });
+    const now = nowISO();
+    let updatedSales = [];
+    db.transaction(() => {
+      db.prepare('UPDATE clients SET name = ?, phone = ?, instagram = ?, note = ?, updated_at = ? WHERE id = ?')
+        .run(f.name, f.phone, f.instagram, f.note, now, id);
+      // optional: put the new name on their past receipts too
+      if (req.body.update_sales) {
+        updatedSales = db.prepare('SELECT id FROM sales WHERE client_id = ? ORDER BY id DESC').all(id).map((r) => r.id);
+        db.prepare('UPDATE sales SET customer_name = ?, updated_at = ? WHERE client_id = ?').run(f.name, now, id);
+      }
+    })();
+    res.json({ client: clientById(id), updated_sales: updatedSales });
   } catch (e) { next(e); }
 });
 
@@ -670,7 +800,7 @@ app.get('/api/export/clients.csv', auth, (req, res) => {
 // ---- settings ----
 app.put('/api/settings', auth, (req, res, next) => {
   try {
-    const numeric = ['low_threshold', 'high_threshold'];
+    const numeric = ['low_threshold', 'high_threshold', 'gift_wrap_price'];
     const text = ['currency', 'shop_phone', 'shop_instagram', 'receipt_note', 'logo'];
     const up = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
     db.transaction(() => {
@@ -693,14 +823,14 @@ app.put('/api/settings', auth, (req, res, next) => {
 app.get('/api/export/sales.csv', auth, (req, res) => {
   const rows = db.prepare(`SELECT s.id, s.created_at, s.created_by, s.customer_name, s.customer_phone, s.customer_instagram,
     i.product_name, i.color_name, i.size_name, i.qty, i.unit_price, i.print_type, i.print_price, i.line_total,
-    s.discount, s.total, s.paid, s.cancelled_at, s.note
+    s.discount, s.total, s.paid, s.cancelled_at, s.note, s.gift, s.gift_to, s.gift_wrap, i.free
     FROM sales s JOIN sale_items i ON i.sale_id = s.id ORDER BY s.id, i.id`).all();
   const esc = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
-  const head = ['invoice', 'date', 'by', 'client', 'phone', 'instagram', 'product', 'color', 'size', 'qty', 'unit_price', 'print', 'print_price', 'line_total', 'sale_discount', 'sale_total', 'paid', 'cancelled', 'note'];
+  const head = ['invoice', 'date', 'by', 'client', 'phone', 'instagram', 'product', 'color', 'size', 'qty', 'unit_price', 'print', 'print_price', 'line_total', 'sale_discount', 'sale_total', 'paid', 'cancelled', 'note', 'gift', 'gift_for', 'gift_wrap', 'free_item'];
   const body = rows.map((r) => [
     'YW-' + String(r.id).padStart(4, '0'), r.created_at, r.created_by, r.customer_name, r.customer_phone, r.customer_instagram ? '@' + r.customer_instagram : '',
     r.product_name, r.color_name, r.size_name, r.qty, r.unit_price, r.print_type, r.print_price, r.line_total, r.discount, r.total,
-    r.paid ? 'yes' : 'no', r.cancelled_at ? 'yes' : '', r.note,
+    r.paid ? 'yes' : 'no', r.cancelled_at ? 'yes' : '', r.note, r.gift ? 'yes' : '', r.gift_to, r.gift_wrap || '', r.free ? 'yes' : '',
   ].map(esc).join(','));
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="yalla-sales.csv"');
@@ -747,7 +877,10 @@ app.get('/r/:token', (req, res) => {
   const v = fs.existsSync(jpg) ? Math.round(fs.statSync(jpg).mtimeMs / 1000) : 0;
   const total = `${Number(sale.total).toLocaleString('en-US')} ${st.currency}`;
   const cancelled = !!sale.cancelled_at;
-  const first = String(sale.customer_name).trim().split(/\s+/)[0] || sale.customer_name;
+  const firstOf = (n) => String(n).trim().split(/\s+/)[0] || n;
+  const forGift = sale.gift && sale.gift_to;
+  const first = firstOf(forGift ? sale.gift_to : sale.customer_name);
+  const giftBox = sale.gift ? `<div class="gift in d6"><div class="gl">🎁 A gift${forGift ? ` from <b dir="auto">${escHtml(firstOf(sale.customer_name))}</b>` : ''} · <span class="ar">هدية</span></div>${sale.gift_message ? `<p dir="auto">${escHtml(sale.gift_message)}</p>` : ''}</div>` : '';
   const contact = [st.shop_instagram && `<a href="https://instagram.com/${escHtml(cleanInstagram(st.shop_instagram))}">Instagram ${escHtml(st.shop_instagram)}</a>`,
     st.shop_phone && `<a href="https://wa.me/${escHtml(String(st.shop_phone).replace(/\D/g, ''))}">WhatsApp ${escHtml(st.shop_phone)}</a>`].filter(Boolean).join(' · ');
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -756,7 +889,7 @@ app.get('/r/:token', (req, res) => {
 <title>Yalla Wear · Receipt ${sale.invoice_no}</title>
 <meta property="og:type" content="website"><meta property="og:site_name" content="Yalla Wear">
 <meta property="og:title" content="Yalla Wear · Receipt ${sale.invoice_no}">
-<meta property="og:description" content="${escHtml(sale.customer_name)} · Total ${escHtml(total)}${cancelled ? ' · CANCELLED' : ''}">
+<meta property="og:description" content="${escHtml(forGift ? 'A gift for ' + sale.gift_to : sale.customer_name)}${sale.gift_hide_prices ? '' : ' · Total ' + escHtml(total)}${cancelled ? ' · CANCELLED' : ''}">
 <meta property="og:image" content="${base}/r/${req.params.token}/og.jpg?v=${v}"><meta property="og:image:type" content="image/jpeg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/brand/icon-512.png">
@@ -807,6 +940,8 @@ app.get('/r/:token', (req, res) => {
 .x{background:rgba(255,92,108,.15);color:#FF7A87;border:1px solid rgba(255,92,108,.4);padding:12px;border-radius:12px;text-align:center;font-weight:600;margin-bottom:14px}
 .f{text-align:center;color:#ABAACB;font-size:13px;margin-top:22px;line-height:1.7}.f a{color:#C0DBC6;text-decoration:none}
 .f img{height:15px;opacity:.9;display:block;margin:0 auto 8px}
+.gift{margin-top:22px;max-width:440px;border:1.5px dashed rgba(192,219,198,.5);border-radius:18px;padding:14px 18px;background:rgba(192,219,198,.07)}
+.gift .gl{font-weight:600;color:#C0DBC6;font-size:15px}.gift .gl b{color:#F2F5F1}.gift p{margin:8px 0 0;font-size:17px;line-height:1.5;color:#F2F5F1;white-space:pre-line}
 </style></head><body>
 <section class="hero">
 <img class="bg" src="/brand/mark.png" alt="">
@@ -816,6 +951,7 @@ app.get('/r/:token', (req, res) => {
 <div class="rule in d4"></div>
 <p class="hi in d5">Hello <b dir="auto">${escHtml(first)}</b>,</p>
 <p class="hi-ar in d5">مرحبا <b dir="auto">${escHtml(first)}</b></p>
+${giftBox}
 ${cancelled
     ? '<div class="ready off in d6">This order was cancelled · <span class="ar">تم إلغاء الطلب</span></div>'
     : '<div class="ready in d6"><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="#C0DBC6" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span class="t"><span>Your order is ready</span><span class="ar">طلبك جاهز</span></span></div>'}
