@@ -841,3 +841,40 @@ table.stock.order-grid { width: max-content; min-width: 100%; }
   .todo-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .todo-tab.main { grid-column: 1 / -1; }
 }
+
+/* ---------- wholesale: their own pieces + design files ---------- */
+.mode-seg { margin-bottom: 14px; }
+.mode-seg button { font-size: 14px; padding: 11px 6px; }
+.own-how .wp-name { margin-bottom: 10px; }
+.own-steps { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.own-steps li { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; line-height: 1.45; }
+.own-steps li b { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--mint-soft); color: var(--mint); display: grid; place-items: center; font-size: 12px; }
+.own-prices { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; padding: 10px 12px; border-radius: var(--r-sm); background: var(--bg-2); border: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.own-prices b { color: var(--text); margin-left: 4px; }
+.own-add .chips { margin-bottom: 4px; flex-wrap: wrap; }
+.own-lbl { font-size: 12px; font-weight: 600; color: var(--muted); margin: 12px 0 6px; }
+.own-other { margin-top: 6px; }
+.own-qty-row { align-items: flex-end; margin-top: 12px; }
+.own-qty-row .btn { flex: 0 0 auto; }
+.own-list { display: grid; gap: 8px; }
+.own-line-qty { width: 72px; flex: none; text-align: center; padding: 8px; }
+.own-note { font-size: 13px; color: var(--amber); background: var(--amber-soft); border-radius: var(--r-sm); padding: 10px 12px; margin: 10px 0 14px; }
+.own-tag { color: var(--mint); font-weight: 700; }
+.own-recv { border: 1px solid rgba(255, 194, 75, .35); background: var(--amber-soft); border-radius: var(--r); padding: 12px; margin: 0 0 14px; display: grid; gap: 8px; }
+.own-recv.all { border-color: rgba(192, 219, 198, .4); background: var(--mint-soft); }
+.own-recv small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.own-recv .bar { height: 6px; border-radius: 6px; background: rgba(255,255,255,.1); overflow: hidden; }
+.own-recv .bar i { display: block; height: 100%; background: var(--amber); border-radius: 6px; transition: width .3s; }
+.own-recv.all .bar i { background: var(--mint); }
+.own-recv-row { gap: 8px; align-items: center; flex-wrap: wrap; }
+.own-recv-row .input { width: 84px; flex: none; }
+.files { display: grid; gap: 8px; margin-bottom: 8px; }
+.file-chip { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.file-chip img, .file-chip .pdf { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex: none; background: var(--bg-2); }
+.file-chip .pdf { display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--red); }
+.file-chip .fn { flex: 1; min-width: 0; }
+.file-chip .fn a { color: var(--text); font-weight: 600; font-size: 13px; text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip .fn small { color: var(--muted); font-size: 11px; }
+.file-btn { cursor: pointer; }
+.file-btn svg { width: 18px; height: 18px; }
+.file-chip .x { border: 0; background: transparent; color: var(--muted); font-size: 20px; padding: 4px; }

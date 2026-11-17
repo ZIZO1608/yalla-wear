@@ -318,6 +318,7 @@ app.disable('x-powered-by');
 app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.use('/api/sales/:id/receipt', express.json({ limit: '12mb' }));
 app.use('/api/ws-orders/:id/invoice', express.json({ limit: '12mb' }));
+app.use(['/api/ws-orders/:id/files', '/api/ws/orders/:id/files'], express.json({ limit: '12mb' }));
 app.use(express.json({ limit: '3mb' }));
 app.use(cookieParser());
 
@@ -837,7 +838,7 @@ app.get('/api/export/clients.csv', auth, (req, res) => {
 // ---- settings ----
 app.put('/api/settings', auth, (req, res, next) => {
   try {
-    const numeric = ['low_threshold', 'high_threshold', 'gift_wrap_price'];
+    const numeric = ['low_threshold', 'high_threshold', 'gift_wrap_price', 'ws_own_front', 'ws_own_front_back'];
     const text = ['currency', 'shop_phone', 'shop_instagram', 'receipt_note', 'logo', 'ws_welcome', 'ws_show_stock', 'design_user', 'print_user', 'design_phone', 'print_phone'];
     const up = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
     db.transaction(() => {

@@ -1789,7 +1789,7 @@
       <div class="main">
         <div class="top"><span class="inv">${o.order_no}</span><span class="who" dir="auto">${esc(o.business_name)}</span>${wsPill(o.status)}${WS_ACTIVE.includes(o.status) && !o.paid ? '<span class="pill unpaid">Not paid</span>' : ''}</div>
         <div class="items">${o.items.slice(0, 6).map((i) => `<span class="mini"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)}</span>`).join('')}${o.items.length > 6 ? `<span class="mini">+${o.items.length - 6} more</span>` : ''}</div>
-        <div class="when">${dateFmt(o.created_at)}${o.due_date ? ` · due ${esc(o.due_date)}` : ''}${o.customer_note ? ` · “${esc(o.customer_note.slice(0, 60))}”` : ''}</div>
+        <div class="when">${dateFmt(o.created_at)}${o.own_pcs ? ` · 🎨 ${o.own_pcs} their pieces (got ${o.own_received})` : ''}${o.files && o.files.length ? ` · 📎 ${o.files.length}` : ''}${o.due_date ? ` · due ${esc(o.due_date)}` : ''}${o.customer_note ? ` · “${esc(o.customer_note.slice(0, 60))}”` : ''}</div>
       </div>
       <div class="amt"><b class="num">${fmt(o.total)}</b><span class="muted" style="font-size:12px">${pcs} pcs · ${esc(cur())}</span></div>
     </button>`;
@@ -1799,7 +1799,7 @@
   const orderAsSale = (o) => ({
     id: o.id, invoice_no: o.order_no, title: ['INVOICE', 'فاتورة'], client_label: 'Wholesaler', client_label_ar: 'تاجر الجملة',
     customer_name: o.business_name, customer_phone: o.phone, customer_instagram: o.instagram, created_at: o.created_at,
-    items: o.items, subtotal: o.subtotal, discount: o.discount, total: o.total, paid: o.paid,
+    items: o.items.map((it) => (it.own ? { ...it, product: `${it.product} (your piece)`, product_ar: `${it.product} (قطعتك)` } : it)), subtotal: o.subtotal, discount: o.discount, total: o.total, paid: o.paid,
     note: [o.due_date ? `Due date: ${o.due_date}` : '', o.customer_note ? `Note: ${o.customer_note}` : ''].filter(Boolean).join(' · '),
   });
   const invoiceCache = new Map();
@@ -1874,6 +1874,7 @@
       const closed = ['rejected', 'cancelled'].includes(st);
       const next = { pending: ['accepted', 'Accept order'], accepted: ['production', 'Start production'], production: ['ready', 'Mark as ready'], ready: ['delivered', 'Mark as delivered'] }[st];
       const pcs = o.items.reduce((t, i) => t + i.qty, 0), taken = o.items.reduce((t, i) => t + i.from_stock, 0);
+      const ourPcs = pcs - (o.own_pcs || 0);
       $('.sheet-title', sh).textContent = o.order_no;
       $('[data-body]', sh).innerHTML = `
         <div style="display:flex;gap:8px;align-items:center;margin:-6px 0 12px;flex-wrap:wrap">
@@ -1886,8 +1887,20 @@
         ${o.due_date ? `<div class="kv"><span>Ready by</span><b>${esc(o.due_date)}</b></div>` : ''}
         ${o.customer_note ? `<div class="gift-card"><div class="gc-h">Their note</div><div class="gc-m" dir="auto">${esc(o.customer_note)}</div></div>` : ''}
         ${o.admin_note ? `<div class="kv"><span>Your note (only you see it)</span><span dir="auto">${esc(o.admin_note)}</span></div>` : ''}
-        ${WS_ACTIVE.includes(st) ? `<p class="muted ws-stock-line">${taken} of ${pcs} pieces came from stock · <b>${pcs - taken} to make</b></p>` : st === 'pending' ? `<p class="muted ws-stock-line">Accepting takes what is in stock now; the rest is made to order.</p>` : ''}
+        ${!ourPcs ? '' : WS_ACTIVE.includes(st) ? `<p class="muted ws-stock-line">${taken} of ${ourPcs} pieces came from stock · <b>${ourPcs - taken} to make</b></p>` : st === 'pending' ? `<p class="muted ws-stock-line">Accepting takes what is in stock now; the rest is made to order.</p>` : ''}
+        ${o.own_pcs ? `<div class="own-recv ${o.own_received >= o.own_pcs ? 'all' : ''}">
+          <div><b>📦 Their pieces: got ${o.own_received} of ${o.own_pcs}</b><small>${o.own_received >= o.own_pcs ? 'All here — ready to print' : `Waiting for ${o.own_pcs - o.own_received} more from them`}</small></div>
+          <div class="bar"><i style="width:${Math.round((o.own_received / o.own_pcs) * 100)}%"></i></div>
+          ${closed ? '' : `<div class="row own-recv-row"><input class="input num" data-recv type="number" min="0" max="${o.own_pcs}" inputmode="numeric" value="${o.own_received}" aria-label="Pieces received" />
+            <button class="btn sm" data-recv-save>Save count</button>${o.own_received < o.own_pcs ? `<button class="btn sm primary" data-recv-all>Got all ${o.own_pcs} ✓</button>` : ''}</div>`}
+        </div>` : ''}
         <div class="detail-items">${o.items.map((it) => {
+          if (it.own) {
+            return `<div class="cart-line"><div class="sw" style="background:${esc(it.hex)};color:${isLight(it.hex) ? '#2E2D4C' : '#fff'}">${esc(it.size === 'Mixed' ? 'MIX' : it.size)}</div>
+            <div class="info"><div class="t" dir="auto">${it.qty} × ${esc(it.product)} · ${esc(it.color)} ${esc(it.size)}</div>
+              <div class="s"><b class="own-tag">Their piece</b> · ${PRINT[it.print_type].en} · ${fmt(it.unit_price + it.print_price)} each</div></div>
+            <div class="p">${fmt(it.line_total)}</div></div>`;
+          }
           const have = qtyOf(it.color_id, it.size_id);
           return `<div class="cart-line"><div class="sw" style="background:${esc(it.hex)};color:${isLight(it.hex) ? '#2E2D4C' : '#fff'}">${esc(it.size === 'ONE SIZE' ? '1SZ' : it.size)}</div>
           <div class="info"><div class="t">${it.qty} × ${esc(it.product)} · ${esc(it.color)} ${esc(it.size)}</div>
@@ -1898,6 +1911,11 @@
           ${o.discount ? `<div class="line"><span>Subtotal</span><span class="num">${fmt(o.subtotal)}</span></div><div class="line"><span>Discount</span><span class="num">−${fmt(o.discount)}</span></div>` : ''}
           <div class="grand"><span>Total · ${pcs} pcs</span><b class="num" ${closed ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${fmt(o.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
         </div>
+        <div class="label" style="margin:16px 0 8px">Design files${o.files.length ? ` · ${o.files.length}` : ''}</div>
+        <div class="files">${o.files.map((f) => `<div class="file-chip">${/^image\//.test(f.mime) ? `<img src="/api/ws-orders/${o.id}/files/${f.id}" alt="">` : '<span class="pdf">PDF</span>'}
+          <div class="fn"><a href="/api/ws-orders/${o.id}/files/${f.id}" target="_blank" rel="noopener" dir="auto">${esc(f.name)}</a><small>${fmt(Math.max(1, Math.round(f.size / 1024)))} KB · ${esc(f.by_name)}</small></div>
+          <a class="icon-btn" href="/api/ws-orders/${o.id}/files/${f.id}" download="${esc(f.name)}" aria-label="Download">${icon.down}</a><button class="x" data-frm="${f.id}" aria-label="Remove">×</button></div>`).join('') || '<p class="muted" style="font-size:13px;margin:0 0 8px">No design files yet.</p>'}</div>
+        <label class="btn block file-btn" style="margin-bottom:12px">${icon.plus}Add design file<input type="file" data-add-file accept="image/png,image/jpeg,image/webp,application/pdf" multiple hidden /></label>
         ${next ? `<button class="btn primary block" data-next="${next[0]}">${next[1]}</button>` : ''}
         ${closed ? '<button class="btn block" data-next="pending">Reopen as pending</button>' : ''}
         <div class="actions-grid" style="margin-top:10px">
@@ -1910,8 +1928,8 @@
         </div>
         ${closed ? '' : `<button class="btn danger block" data-reject style="margin-top:4px">${st === 'pending' ? 'Reject order' : 'Cancel order'}</button>`}
         ${o.events.length ? `<div class="label" style="margin:22px 0 10px">History</div><div class="ws-events">${o.events.slice().reverse().map((e) => `
-          <div class="ws-ev"><i></i><div><b>${e.kind === 'status' ? WS_STATUS[e.status].en : e.kind === 'created' ? 'Order placed' : e.kind === 'paid' ? esc(e.note) : 'Changed'}</b>
-          <small>${dateFmt(e.created_at)} · ${esc(e.by_name)}${e.note && e.kind !== 'paid' ? ' · ' + esc(e.note) : ''}</small></div></div>`).join('')}</div>` : ''}`;
+          <div class="ws-ev"><i></i><div><b>${e.kind === 'status' ? WS_STATUS[e.status].en : e.kind === 'created' ? 'Order placed' : e.kind === 'paid' || e.kind === 'received' ? esc(e.note) : 'Changed'}</b>
+          <small>${dateFmt(e.created_at)} · ${esc(e.by_name)}${e.note && e.kind !== 'paid' && e.kind !== 'received' ? ' · ' + esc(e.note) : ''}</small></div></div>`).join('')}</div>` : ''}`;
       $('[data-open-ws]', sh).onclick = () => openWholesaler(o.wholesaler_id);
       $$('[data-set]', sh).forEach((b) => (b.onclick = () => { if (b.dataset.set !== o.status) setStatus(b.dataset.set, b); }));
       $$('[data-next]', sh).forEach((b) => (b.onclick = () => setStatus(b.dataset.next, b)));
@@ -1930,6 +1948,32 @@
         } catch (e) { toast('err', 'Could not make the invoice', e.message); }
       });
       $('[data-edit-order]', sh).onclick = () => openWsOrderEditor(o, (r) => apply(r));
+      const saveRecv = (n, btn) => busy(btn, async () => {
+        const before = o.own_received;
+        try {
+          apply(await api(`/api/ws-orders/${o.id}/received`, { body: { received: n } }));
+          undoable(`Got ${o.own_received} of ${o.own_pcs} of their pieces`, 'They see it in their dashboard', async () => apply(await api(`/api/ws-orders/${o.id}/received`, { body: { received: before } })));
+        } catch (e) { toast('err', e.message); }
+      });
+      const rs = $('[data-recv-save]', sh); if (rs) rs.onclick = () => saveRecv(Math.max(0, Number($('[data-recv]', sh).value) || 0), rs);
+      const ra = $('[data-recv-all]', sh); if (ra) ra.onclick = () => saveRecv(o.own_pcs, ra);
+      const af = $('[data-add-file]', sh);
+      af.onchange = () => busy(af.closest('label'), async () => {
+        for (const f of [...af.files]) {
+          if (!/^(image\/(png|jpeg|webp)|application\/pdf)$/.test(f.type)) { toast('err', `${f.name}: PNG, JPG, WEBP or PDF only`); continue; }
+          if (f.size > 8 * 1024 * 1024) { toast('err', `${f.name} is too big (8 MB max)`); continue; }
+          try {
+            const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+            o = (await api(`/api/ws-orders/${o.id}/files`, { body: { name: f.name, data } })).order;
+          } catch (e) { toast('err', 'Could not add it', e.message); }
+        }
+        if (sh.isConnected) paint();
+      });
+      $$('[data-frm]', sh).forEach((b) => (b.onclick = async () => {
+        const ok = await confirmSheet('Remove this file?', 'The wholesaler will not see it any more.', 'Yes, remove', true);
+        if (!ok) return;
+        try { o = (await api(`/api/ws-orders/${o.id}/files/${b.dataset.frm}`, { method: 'DELETE' })).order; if (sh.isConnected) paint(); } catch (e) { toast('err', e.message); }
+      }));
       const pb = $('[data-paid]', sh);
       if (pb) pb.onclick = () => busy(pb, async () => {
         const want = !o.paid;
@@ -1952,7 +1996,10 @@
   // edit every part of an order (or write a new one for a wholesaler)
   function openWsOrderEditor(o, onSaved) {
     const isNew = !o.id;
-    const D = { items: o.items.map((i) => ({ id: i.id, product_id: i.product_id, color_id: i.color_id, size_id: i.size_id, qty: i.qty, unit_price: i.unit_price, print_type: i.print_type, print_price: i.print_price, saved_print: i.print_type, name: `${i.product} · ${i.color} ${i.size}`, hex: i.hex })) };
+    const D = { items: o.items.map((i) => ({ id: i.id, own: !!i.own, garment: i.product, color: i.color, size: i.size, product_id: i.product_id, color_id: i.color_id, size_id: i.size_id, qty: i.qty, unit_price: i.unit_price, print_type: i.print_type, print_price: i.print_price, saved_print: i.print_type, name: `${i.product} · ${i.color} ${i.size}`, hex: i.hex })) };
+    const st0 = S.data.settings || {};
+    const ownFee = (t) => Number(t === 'front_back' ? st0.ws_own_front_back : st0.ws_own_front) || 0;
+    const OWN = { garment: 'Hoodie', color: '', size: 'Mixed', qty: 1, print_type: 'front' };
     const wsProducts = () => products();
     const firstP = wsProducts()[0];
     const P = { product_id: firstP ? firstP.id : null, color_id: null, size_id: null, qty: 1, print_type: 'none' };
@@ -1965,6 +2012,20 @@
         <div class="label" style="margin-bottom:8px">Add an item</div>
         <div data-picker></div>
       </div>
+      <div class="ws-add card">
+        <div class="label" style="margin-bottom:8px">🎨 Add their own pieces (they bring them, you print)</div>
+        <div class="row stack-sm">
+          <div class="field" style="margin:0 0 8px"><label>Piece</label><input class="input" data-og maxlength="40" dir="auto" value="Hoodie" /></div>
+          <div class="field" style="margin:0 0 8px"><label>Color</label><input class="input" data-oc maxlength="30" dir="auto" placeholder="Black" /></div>
+          <div class="field" style="margin:0 0 8px"><label>Size</label><input class="input" data-oz maxlength="12" value="Mixed" /></div>
+        </div>
+        <div class="seg" style="margin-bottom:10px" data-opt-seg>${['front', 'front_back'].map((t) => `<button class="${OWN.print_type === t ? 'on' : ''}" data-opt="${t}">${PRINT[t].en}<small>${fmt(ownFee(t))}</small></button>`).join('')}</div>
+        <div class="row" style="align-items:flex-end">
+          <div class="field" style="margin:0"><label>Qty</label><input class="input num" type="number" min="1" inputmode="numeric" data-oq value="1" /></div>
+          <div class="field" style="margin:0"><label>Print price each</label><input class="input num" type="number" min="0" inputmode="numeric" data-ou value="${ownFee('front')}" /></div>
+          <button class="btn" data-oadd style="flex:0 0 auto">${icon.plus}Add</button>
+        </div>
+      </div>
       <div class="row">
         <div class="field"><label>Discount (${esc(cur())})</label><input class="input num" data-discount type="number" min="0" inputmode="numeric" value="${o.discount || ''}" placeholder="0" /></div>
         <div class="field"><label>Ready by (date)</label><input class="input" data-due type="date" value="${esc(o.due_date || '')}" /></div>
@@ -1975,14 +2036,14 @@
       <div class="totals" data-totals></div>
       <button class="btn primary block" data-save>${isNew ? 'Create order' : 'Save changes & update invoice'}</button>`, { wide: true });
 
-    const lineUnit = (l) => Number(l.unit_price || 0) + (l.id && l.print_type === l.saved_print ? l.print_price : printPriceOf(productById(l.product_id), l.print_type));
+    const lineUnit = (l) => (l.own ? Number(l.unit_price || 0) : Number(l.unit_price || 0) + (l.id && l.print_type === l.saved_print ? l.print_price : printPriceOf(productById(l.product_id), l.print_type)));
     function paintLines() {
       $('[data-lines]', sh).innerHTML = D.items.length ? D.items.map((l, i) => `<div class="cart-line ws-edit-line">
         <div class="sw" style="background:${esc(l.hex)}"></div>
-        <div class="info"><div class="t">${esc(l.name)}</div><div class="s">${PRINT[l.print_type].en} · ${qtyOf(l.color_id, l.size_id)} in stock</div>
+        <div class="info"><div class="t" dir="auto">${esc(l.name)}</div><div class="s">${PRINT[l.print_type].en} · ${l.own ? '<b class="own-tag">Their piece</b>' : `${qtyOf(l.color_id, l.size_id)} in stock`}</div>
           <div class="row ws-line-inputs">
             <label><span>Qty</span><input class="input num" type="number" min="1" inputmode="numeric" data-lq="${i}" value="${l.qty}" /></label>
-            <label><span>Price each</span><input class="input num" type="number" min="0" inputmode="numeric" data-lp="${i}" value="${l.unit_price}" /></label>
+            <label><span>${l.own ? 'Print price' : 'Price each'}</span><input class="input num" type="number" min="0" inputmode="numeric" data-lp="${i}" value="${l.unit_price}" /></label>
           </div></div>
         <div class="p num" data-lt="${i}">${fmt(lineUnit(l) * l.qty)}</div><button class="x" data-lrm="${i}" aria-label="Remove">×</button></div>`).join('') : '<p class="muted" style="font-size:13px;margin:0">No items yet — add them below.</p>';
       $$('[data-lq]', sh).forEach((inp) => (inp.oninput = () => { D.items[+inp.dataset.lq].qty = Math.max(1, Number(inp.value) || 1); $(`[data-lt="${inp.dataset.lq}"]`, sh).textContent = fmt(lineUnit(D.items[+inp.dataset.lq]) * D.items[+inp.dataset.lq].qty); paintTotals(); }));
@@ -2023,10 +2084,25 @@
         <div class="grand"><span>Total</span><b class="num">${fmt(sub - disc)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>`;
       $('[data-save]', sh).disabled = !D.items.length;
     }
+    $$('[data-opt]', sh).forEach((b) => (b.onclick = () => {
+      OWN.print_type = b.dataset.opt;
+      $$('[data-opt]', sh).forEach((x) => x.classList.toggle('on', x === b));
+      $('[data-ou]', sh).value = ownFee(OWN.print_type);
+    }));
+    $('[data-oadd]', sh).onclick = () => {
+      const garment = $('[data-og]', sh).value.trim() || 'Hoodie', color = $('[data-oc]', sh).value.trim(), size = $('[data-oz]', sh).value.trim() || 'Mixed';
+      if (!color) return toast('err', 'Type the color of their pieces');
+      const qty = Math.max(1, Number($('[data-oq]', sh).value) || 1);
+      D.items.push({ own: true, garment, color, size, qty, unit_price: Math.max(0, Number($('[data-ou]', sh).value) || 0), print_type: OWN.print_type, name: `${garment} · ${color} ${size}`, hex: '#8A8A99' });
+      $('[data-oq]', sh).value = 1;
+      paintLines(); paintTotals();
+    };
     $('[data-discount]', sh).oninput = paintTotals;
     $('[data-save]', sh).onclick = (ev) => busy(ev.currentTarget, async () => {
       const body = {
-        items: D.items.map((l) => ({ id: l.id, color_id: l.color_id, size_id: l.size_id, qty: l.qty, unit_price: l.unit_price, print_type: l.print_type })),
+        items: D.items.map((l) => (l.own
+          ? { id: l.id, own: true, garment: l.garment, color: l.color, size: l.size, hex: l.hex, qty: l.qty, unit_price: l.unit_price, print_type: l.print_type }
+          : { id: l.id, color_id: l.color_id, size_id: l.size_id, qty: l.qty, unit_price: l.unit_price, print_type: l.print_type })),
         discount: Number($('[data-discount]', sh).value) || 0, due_date: $('[data-due]', sh).value,
         customer_note: $('[data-cnote]', sh).value, admin_note: $('[data-anote]', sh).value, paid: $('[data-paid-sw]', sh).checked,
       };
@@ -2191,6 +2267,10 @@
         <button class="btn sm" data-copy-portal>${icon.share}Copy</button>
       </div>
       <div class="field"><label>Welcome message on the portal</label><textarea class="input" data-k="ws_welcome" rows="2" maxlength="400" dir="auto">${esc(st.ws_welcome || '')}</textarea></div>
+      <div class="row">
+        <div class="field"><label>🎨 Print on their own piece — front (${esc(cur())})</label><input class="input num" data-k="ws_own_front" type="number" min="0" inputmode="numeric" value="${esc(st.ws_own_front || 0)}" /></div>
+        <div class="field"><label>Front + back (${esc(cur())})</label><input class="input num" data-k="ws_own_front_back" type="number" min="0" inputmode="numeric" value="${esc(st.ws_own_front_back || 0)}" /></div>
+      </div>
       <label class="switch" style="margin-bottom:14px"><span>Show wholesalers the exact stock count (off = just “in stock” / “made to order”)</span><input type="checkbox" data-ws-stock ${st.ws_show_stock === '0' ? '' : 'checked'} /></label>
       <button class="btn primary block" data-save>Save settings</button>
       <a class="btn block" href="/api/backup" download style="margin-top:10px">${icon.down}Download backup (all stock + sales)</a>`, { wide: true });

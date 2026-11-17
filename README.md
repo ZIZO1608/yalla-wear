@@ -14,6 +14,8 @@ The stock and sales tracker for Yalla Wear. You and Zohrab log in from your phon
   - Give a product a **wholesale price** (and the least pieces per order) in the product editor. Only those products show on the portal.
   - **Wholesale tab → Wholesalers → Add**: shop name, contact, and a username and password. **Send login** sends them the link and password on WhatsApp.
   - They type how many they want in a color × size grid, see what's in stock and what will be made for them, and send the order. They can change or cancel it until you accept it.
+  - **Your hoodies, our print.** On the portal's second tab they list their own pieces (hoodie, t-shirt…, color, size or "mixed sizes", how many, front or front + back) and attach their logo/design (PNG, JPG, WEBP or PDF, up to 8 files). They pay the print only — set the prices in Settings → Wholesale portal. One order can mix your hoodies and theirs. Their pieces never touch your stock.
+  - When their pieces arrive, open the order and tap **Got all ✓** (or type how many came). They see "we got 30 of 40" on their dashboard. Design files can be opened and downloaded from the order; their print goes to the designer's to-do list marked "(theirs)".
   - You **Accept → Start production → Mark ready → Mark delivered** (or Reject). Accepting takes what's in stock; the rest is "to make". Rejecting or cancelling puts those pieces back.
   - **Edit order** changes anything: items, prices, discount, ready-by date, notes, paid. The invoice (PDF) is remade after every change and the wholesaler downloads it from their dashboard. **Tell them** sends a status message on WhatsApp.
   - Their dashboard shows every order, its progress, totals, what they still owe, and the history.

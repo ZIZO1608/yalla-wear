@@ -10,7 +10,13 @@
   const TZ = 'Asia/Damascus';
   const dateFmt = (iso) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso)).replace(',', ' ·');
   const dateOnly = (iso) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(iso));
-  const P = { me: null, shop: null, cat: null, orders: null, view: 'shop', cart: {}, print: {}, note: '', editing: null };
+  const P = { me: null, shop: null, cat: null, orders: null, view: 'shop', mode: 'stock', cart: {}, print: {}, own: [], files: [], note: '', editing: null,
+    draft: { garment: 'Hoodie', color: 'Black', hex: '#1D1D1F', size: 'M', qty: '', print_type: 'front' } };
+  // their own pieces: what they can pick when they bring their hoodies for us to print
+  const GARMENTS = [['Hoodie', 'هودي'], ['Zip hoodie', 'هودي سحاب'], ['Sweatshirt', 'كنزة'], ['T-shirt', 'تيشيرت']];
+  const OWN_COLORS = [['Black', '#1D1D1F'], ['White', '#F5F5F2'], ['Grey', '#9A9AA0'], ['Navy', '#1F2A4D'], ['Beige', '#D8C7A8'], ['Brown', '#6B4A35'], ['Green', '#3E5B3A'], ['Red', '#A3262A']];
+  const OWN_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', 'Mixed'];
+  const ownFee = (t) => (t === 'front_back' ? P.shop.own_front_back : P.shop.own_front) || 0;
   const cur = () => (P.shop ? P.shop.currency : 'SYP');
   const money = (n) => `${fmt(n)} ${cur()}`;
   const PRINT = { none: ['No print', 'بدون طباعة'], front: ['Front print', 'طباعة أمامية'], front_back: ['Front + back', 'أمامية وخلفية'] };
@@ -34,6 +40,7 @@
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>',
     wa: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.3 14.1c-.2.6-1.3 1.2-1.8 1.3-.5 0-1 .2-3.3-.7-2.8-1.1-4.6-4-4.7-4.2-.1-.2-1.1-1.5-1.1-2.9s.7-2.1 1-2.4c.3-.3.6-.3.8-.3h.6c.2 0 .4 0 .6.5l.9 2.1c.1.2.1.4 0 .6l-.4.6-.4.5c-.1.1-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.3 2.4 1.5.3.1.5.1.7-.1l.9-1.1c.2-.3.4-.2.7-.1l2 1c.3.1.5.2.5.3.1.2.1.7-.1 1.3z"/></svg>',
     ig: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg>',
+    clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   };
   const isLight = (hex) => {
@@ -95,11 +102,11 @@
 
   // ---------- cart (kept on this phone so a half-made order is not lost) ----------
   const cartKey = () => `yw-ws-cart-${P.me ? P.me.id : 0}`;
-  const saveCart = () => { try { localStorage.setItem(cartKey(), JSON.stringify({ cart: P.cart, print: P.print, note: P.note, editing: P.editing })); } catch { /* private mode */ } };
+  const saveCart = () => { try { localStorage.setItem(cartKey(), JSON.stringify({ cart: P.cart, print: P.print, own: P.own, note: P.note, editing: P.editing })); } catch { /* private mode */ } };
   const loadCart = () => {
-    try { const v = JSON.parse(localStorage.getItem(cartKey()) || 'null'); if (v) Object.assign(P, { cart: v.cart || {}, print: v.print || {}, note: v.note || '', editing: v.editing || null }); } catch { /* ignore */ }
+    try { const v = JSON.parse(localStorage.getItem(cartKey()) || 'null'); if (v) Object.assign(P, { cart: v.cart || {}, print: v.print || {}, own: Array.isArray(v.own) ? v.own : [], note: v.note || '', editing: v.editing || null }); } catch { /* ignore */ }
   };
-  const clearCart = () => { P.cart = {}; P.print = {}; P.note = ''; P.editing = null; saveCart(); };
+  const clearCart = () => { P.cart = {}; P.print = {}; P.own = []; P.files = []; P.note = ''; P.editing = null; saveCart(); };
 
   const prod = (id) => P.cat.products.find((p) => p.id === id);
   const colorsOf = (pid) => P.cat.colors.filter((c) => c.product_id === pid);
@@ -120,9 +127,11 @@
     }
     return lines;
   }
+  const ownLines = () => P.own.filter((l) => l.qty > 0).map((l) => ({ ...l, unit: ownFee(l.print_type) }));
   const cartTotals = () => {
-    const lines = cartLines();
-    return { lines, pcs: lines.reduce((t, l) => t + l.qty, 0), total: lines.reduce((t, l) => t + l.unit * l.qty, 0) };
+    const lines = cartLines(), own = ownLines();
+    const all = [...lines, ...own];
+    return { lines, own, pcs: all.reduce((t, l) => t + l.qty, 0), ownPcs: own.reduce((t, l) => t + l.qty, 0), total: all.reduce((t, l) => t + l.unit * l.qty, 0) };
   };
   const underMin = (lines) => {
     const per = {};
@@ -189,9 +198,16 @@
   function renderShop() {
     const showStock = P.cat.show_stock;
     const prods = P.cat.products;
-    $('#view').innerHTML = `
+    const stockPcs = cartLines().reduce((t, l) => t + l.qty, 0), ownPcs = ownLines().reduce((t, l) => t + l.qty, 0);
+    const head = `
       ${P.editing ? `<div class="edit-banner"><div><b>Editing ${esc(P.editing.no)}</b><small>Change the numbers, then review and save. · <span class="ar">عدّل الطلب</span></small></div><button class="btn sm" id="stop-edit">Stop editing</button></div>` : ''}
       ${P.shop.welcome && !P.editing ? `<div class="welcome card"><div class="wl-hi">Hello <b dir="auto">${esc(P.me.contact_name || P.me.business_name)}</b> 👋 <span class="ar">أهلاً</span></div><p dir="auto">${esc(P.shop.welcome)}</p></div>` : ''}
+      <div class="seg mode-seg">
+        <button class="${P.mode === 'stock' ? 'on' : ''}" data-mode="stock">Our hoodies${stockPcs ? ` · ${stockPcs}` : ''}<small class="ar">من عنا</small></button>
+        <button class="${P.mode === 'own' ? 'on' : ''}" data-mode="own">🎨 Your hoodies, our print${ownPcs ? ` · ${ownPcs}` : ''}<small class="ar">قطعك وطباعتنا</small></button>
+      </div>`;
+    if (P.mode === 'own') { $('#view').innerHTML = head; renderOwn(); bindHead(); return; }
+    $('#view').innerHTML = `${head}
       ${prods.length ? prods.map((p) => {
         const cs = colorsOf(p.id), ss = sizesOf(p.id);
         const pt = P.print[p.id] || 'none';
@@ -216,8 +232,7 @@
         </section>`;
       }).join('') : '<div class="empty"><b>Nothing to order yet</b>Yalla Wear will add products here soon. · <span class="ar">قريباً</span></div>'}
       <p class="muted portal-help">Pieces we don't have in stock are made for you — we'll confirm the date. · <span class="ar">القطع غير المتوفرة منصنعها إلك ومنأكدلك الموعد</span></p>`;
-    const stop = $('#stop-edit');
-    if (stop) stop.onclick = () => { clearCart(); renderShell(); toast('ok', 'Stopped editing', 'Your order was not changed'); };
+    bindHead();
     $$('.wp').forEach((sec) => {
       const pid = Number(sec.dataset.p);
       $$('[data-pt]', sec).forEach((b) => (b.onclick = () => { P.print[pid] = b.dataset.pt; saveCart(); paintCartBar(); }));
@@ -231,6 +246,98 @@
       inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
     });
   }
+  function bindHead() {
+    const stop = $('#stop-edit');
+    if (stop) stop.onclick = () => { clearCart(); renderShell(); toast('ok', 'Stopped editing', 'Your order was not changed'); };
+    $$('[data-mode]').forEach((b) => (b.onclick = () => { if (P.mode !== b.dataset.mode) { P.mode = b.dataset.mode; paintCartBar(); } }));
+  }
+
+  // ---------- YOUR HOODIES: they bring their own pieces, we print on them ----------
+  function renderOwn() {
+    const d = P.draft;
+    const otherColor = !OWN_COLORS.some(([n]) => n === d.color);
+    const otherGarment = !GARMENTS.some(([n]) => n === d.garment);
+    const lines = P.own;
+    const box = document.createElement('div');
+    box.innerHTML = `
+      <section class="card own-how">
+        <div class="wp-name">Print on your own hoodies <span class="ar">منطبع على قطعك</span></div>
+        <ol class="own-steps">
+          <li><b>1</b><span>Add your pieces below: what they are, color, size, how many. <span class="ar">ضيف قطعك</span></span></li>
+          <li><b>2</b><span>Attach your logo / design when you review the order. <span class="ar">ارفع التصميم</span></span></li>
+          <li><b>3</b><span>Send or bring us the pieces — we tell you when we got them. <span class="ar">بعتلنا القطع</span></span></li>
+          <li><b>4</b><span>We print and you pick them up. You pay for the print only. <span class="ar">بتدفع الطباعة بس</span></span></li>
+        </ol>
+        <div class="own-prices"><span>Front print <b class="num">${money(P.shop.own_front)}</b></span><span>Front + back <b class="num">${money(P.shop.own_front_back)}</b></span><small>per piece · <span class="ar">للقطعة</span></small></div>
+      </section>
+      <section class="card own-add">
+        <div class="label">Add pieces · <span class="ar">ضيف قطع</span></div>
+        <div class="own-lbl">What is it? · <span class="ar">شو القطعة</span></div>
+        <div class="chips">${GARMENTS.map(([n, ar]) => `<button class="chip ${d.garment === n ? 'on' : ''}" data-g="${esc(n)}">${esc(n)} <span class="ar">${ar}</span></button>`).join('')}<button class="chip ${otherGarment ? 'on' : ''}" data-g="">Other</button></div>
+        ${otherGarment ? `<input class="input own-other" data-g-other maxlength="40" dir="auto" placeholder="e.g. Jacket, Cap…" value="${esc(d.garment)}" />` : ''}
+        <div class="own-lbl">Color · <span class="ar">اللون</span></div>
+        <div class="chips">${OWN_COLORS.map(([n, hex]) => `<button class="chip ${d.color === n ? 'on' : ''}" data-c="${esc(n)}" data-hex="${hex}"><i class="sw" style="background:${hex}"></i>${esc(n)}</button>`).join('')}<button class="chip ${otherColor ? 'on' : ''}" data-c="" data-hex="#8A8A99">Other</button></div>
+        ${otherColor ? `<input class="input own-other" data-c-other maxlength="30" dir="auto" placeholder="Which color?" value="${esc(d.color)}" />` : ''}
+        <div class="own-lbl">Size · <span class="ar">القياس</span></div>
+        <div class="chips">${OWN_SIZES.map((z) => `<button class="chip size-chip ${d.size === z ? 'on' : ''}" data-z="${z}">${z === 'Mixed' ? 'Mixed sizes' : z}</button>`).join('')}</div>
+        <div class="own-lbl">Print · <span class="ar">الطباعة</span></div>
+        <div class="seg">${['front', 'front_back'].map((t) => `<button class="${d.print_type === t ? 'on' : ''}" data-opt="${t}">${PRINT[t][0]}<small>${fmt(ownFee(t))} each</small></button>`).join('')}</div>
+        <div class="row own-qty-row">
+          <div class="field" style="margin:0"><label>How many? · <span class="ar">العدد</span></label><input class="input num" data-oq type="number" min="1" inputmode="numeric" placeholder="0" value="${esc(d.qty)}" /></div>
+          <button class="btn primary" data-oadd>+ Add</button>
+        </div>
+      </section>
+      <section class="card own-list">
+        <div class="label">Your pieces · <span class="ar">قطعك</span>${lines.length ? ` <span class="muted">· ${lines.reduce((t, l) => t + l.qty, 0)} pcs</span>` : ''}</div>
+        ${lines.length ? lines.map((l, i) => `<div class="cart-line"><div class="sw" style="background:${esc(l.hex)};color:${isLight(l.hex) ? '#2E2D4C' : '#fff'}">${esc(l.size === 'Mixed' ? 'MIX' : l.size)}</div>
+          <div class="info"><div class="t" dir="auto">${esc(l.garment)} · ${esc(l.color)} · ${esc(l.size === 'Mixed' ? 'mixed sizes' : l.size)}</div><div class="s">${PRINT[l.print_type][0]} · ${fmt(ownFee(l.print_type))} each</div></div>
+          <input class="input num own-line-qty" type="number" min="1" inputmode="numeric" data-olq="${i}" value="${l.qty}" aria-label="How many" />
+          <button class="x" data-orm="${i}" aria-label="Remove">×</button></div>`).join('') : '<p class="muted" style="font-size:13px;margin:6px 0 0">Nothing added yet. · <span class="ar">ما ضفت شي بعد</span></p>'}
+      </section>`;
+    $('#view').append(...box.children);
+    const v = $('#view');
+    const keep = (fn) => () => { fn(); paintCartBar(); };
+    $$('[data-g]', v).forEach((b) => (b.onclick = keep(() => { d.garment = b.dataset.g; })));
+    $$('[data-c]', v).forEach((b) => (b.onclick = keep(() => { d.color = b.dataset.c; d.hex = b.dataset.hex; })));
+    $$('[data-z]', v).forEach((b) => (b.onclick = keep(() => { d.size = b.dataset.z; })));
+    $$('[data-opt]', v).forEach((b) => (b.onclick = keep(() => { d.print_type = b.dataset.opt; })));
+    const go = $('[data-g-other]', v); if (go) go.oninput = () => { d.garment = go.value; };
+    const co = $('[data-c-other]', v); if (co) co.oninput = () => { d.color = co.value; };
+    $('[data-oq]', v).oninput = (e) => { d.qty = e.target.value; };
+    $('[data-oq]', v).onkeydown = (e) => { if (e.key === 'Enter') $('[data-oadd]', v).click(); };
+    $('[data-oadd]', v).onclick = () => {
+      const qty = Math.floor(Number(d.qty) || 0);
+      if (qty < 1) return toast('err', 'How many pieces?', 'Type the number first · اكتب العدد');
+      if (!String(d.garment).trim()) return toast('err', 'What is the piece?', 'Pick or type it · اختار القطعة');
+      if (!String(d.color).trim()) return toast('err', 'Which color?', 'Pick or type it · اختار اللون');
+      const same = P.own.find((l) => l.garment === d.garment.trim() && l.color === d.color.trim() && l.size === d.size && l.print_type === d.print_type);
+      if (same) same.qty += qty;
+      else P.own.push({ garment: d.garment.trim(), color: d.color.trim(), hex: d.hex, size: d.size, qty, print_type: d.print_type });
+      d.qty = '';
+      saveCart(); paintCartBar();
+      toast('ok', `${qty} × ${d.garment} added`, `${d.color} · ${d.size}`, 2200);
+    };
+    $$('[data-olq]', v).forEach((inp) => (inp.onchange = () => {
+      const q = Math.floor(Number(inp.value) || 0);
+      if (q < 1) P.own.splice(+inp.dataset.olq, 1); else P.own[+inp.dataset.olq].qty = q;
+      saveCart(); paintCartBar();
+    }));
+    $$('[data-orm]', v).forEach((b) => (b.onclick = () => { P.own.splice(+b.dataset.orm, 1); saveCart(); paintCartBar(); }));
+  }
+
+  // files: read a picture / PDF for upload (kept on this page only until the order is sent)
+  const MAX_FILE = 8 * 1024 * 1024;
+  const readFile = (f) => new Promise((resolve, reject) => {
+    if (!/^(image\/(png|jpeg|webp)|application\/pdf)$/.test(f.type)) return reject(new Error(`${f.name}: send a PNG, JPG, WEBP or PDF`));
+    if (f.size > MAX_FILE) return reject(new Error(`${f.name} is too big (8 MB max)`));
+    const r = new FileReader();
+    r.onload = () => resolve({ name: f.name, data: r.result, type: f.type, size: f.size });
+    r.onerror = () => reject(new Error(`Could not read ${f.name}`));
+    r.readAsDataURL(f);
+  });
+  const fileChip = (f, href, rm) => `<div class="file-chip">${/^image\//.test(f.mime || f.type) && (href || f.data) ? `<img src="${esc(href || f.data)}" alt="">` : '<span class="pdf">PDF</span>'}
+    <div class="fn"><a ${href ? `href="${esc(href)}" target="_blank" rel="noopener"` : ''} dir="auto">${esc(f.name)}</a><small>${fmt(Math.max(1, Math.round(f.size / 1024)))} KB</small></div>${rm != null ? `<button class="x" data-frm="${rm}" aria-label="Remove">×</button>` : ''}</div>`;
+
   // updates the numbers in place (no redraw, so the next box you tap still gets the tap)
   function updateCounts(inp) {
     const [cid, sid] = inp.dataset.k.split(':').map(Number);
@@ -269,9 +376,18 @@
     const showStock = P.cat.show_stock;
     const toMake = t.lines.reduce((a, l) => a + Math.max(0, l.qty - stockOf(l.c.id, l.s.id)), 0);
     const sh = openSheet(`${sheetHead(P.editing ? `Save ${esc(P.editing.no)}` : 'Your order')}
+      ${t.own.length && t.lines.length ? '<div class="label" style="margin-bottom:6px">From our stock · <span class="ar">من عنا</span></div>' : ''}
       <div class="cart">${t.lines.map((l) => `<div class="cart-line"><div class="sw" style="background:${esc(l.c.hex)};color:${isLight(l.c.hex) ? '#2E2D4C' : '#fff'}">${esc(l.s.name === 'ONE SIZE' ? '1SZ' : l.s.name)}</div>
         <div class="info"><div class="t">${l.qty} × ${esc(l.p.name)} · ${esc(l.c.name)} ${esc(l.s.name)}</div><div class="s">${PRINT[l.print_type][0]} · ${fmt(l.unit)} each</div></div>
         <div class="p">${fmt(l.unit * l.qty)}</div></div>`).join('')}</div>
+      ${t.own.length ? `<div class="label" style="margin:${t.lines.length ? '14px' : '0'} 0 6px">🎨 Your pieces, we print · <span class="ar">قطعك</span></div>
+      <div class="cart">${t.own.map((l) => `<div class="cart-line"><div class="sw" style="background:${esc(l.hex)};color:${isLight(l.hex) ? '#2E2D4C' : '#fff'}">${esc(l.size === 'Mixed' ? 'MIX' : l.size)}</div>
+        <div class="info"><div class="t" dir="auto">${l.qty} × ${esc(l.garment)} · ${esc(l.color)} ${esc(l.size === 'Mixed' ? 'mixed sizes' : l.size)}</div><div class="s">Your piece · ${PRINT[l.print_type][0]} · ${fmt(l.unit)} each</div></div>
+        <div class="p">${fmt(l.unit * l.qty)}</div></div>`).join('')}</div>
+      <p class="own-note">📦 Send or bring us your ${t.ownPcs} piece${t.ownPcs === 1 ? '' : 's'} — we start printing when they arrive. · <span class="ar">بعتلنا القطع لنبلش طباعة</span></p>` : ''}
+      ${t.own.length || Object.values(P.print).some((x) => x && x !== 'none') ? `<div class="field"><label>${bi('Your design / logo (picture or PDF)', 'التصميم أو اللوغو')}</label>
+        <div class="files" data-files></div>
+        <label class="btn block file-btn">${icon.clip}Attach design · <span class="ar">ارفع ملف</span><input type="file" data-file accept="image/png,image/jpeg,image/webp,application/pdf" multiple hidden /></label></div>` : ''}
       ${short.length ? `<div class="wp-warn box">${short.map((x) => `${esc(x.p.name)}: the least is ${x.p.wholesale_min} pieces (you have ${x.n})`).join('<br>')}</div>` : ''}
       ${showStock && toMake ? `<p class="muted" style="font-size:13px">${toMake} piece${toMake === 1 ? '' : 's'} will be made for you · <span class="ar">${toMake} قطع للتصنيع</span></p>` : ''}
       <div class="field"><label>${bi('Note for Yalla Wear (date, delivery, design…)', 'ملاحظة')}</label><textarea class="input" data-note rows="2" maxlength="500" dir="auto" placeholder="Optional">${esc(P.note)}</textarea></div>
@@ -280,11 +396,34 @@
       <p class="muted" style="font-size:12px;margin:-4px 0 12px">Yalla Wear confirms the final price and date when they accept your order. · <span class="ar">منأكد السعر والموعد عند القبول</span></p>
       <button class="btn primary block" data-send ${short.length ? 'disabled' : ''}>${P.editing ? 'Save changes' : 'Send order'} · <span class="ar">${P.editing ? 'حفظ' : 'إرسال الطلب'}</span></button>`);
     $('[data-note]', sh).oninput = (e) => { P.note = e.target.value; saveCart(); };
+    const paintFiles = () => {
+      const el = $('[data-files]', sh);
+      if (!el) return;
+      el.innerHTML = P.files.map((f, i) => fileChip(f, null, i)).join('');
+      $$('[data-frm]', el).forEach((b) => (b.onclick = () => { P.files.splice(+b.dataset.frm, 1); paintFiles(); }));
+    };
+    const fin = $('[data-file]', sh);
+    if (fin) fin.onchange = async () => {
+      for (const f of [...fin.files]) {
+        if (P.files.length >= 8) { toast('err', 'Up to 8 files'); break; }
+        try { P.files.push(await readFile(f)); } catch (err) { toast('err', err.message); }
+      }
+      fin.value = ''; paintFiles();
+    };
+    paintFiles();
     $('[data-send]', sh).onclick = (e) => busy(e.currentTarget, async () => {
-      const body = { items: t.lines.map((l) => ({ color_id: l.c.id, size_id: l.s.id, qty: l.qty, print_type: l.print_type })), note: P.note };
+      const body = { items: [
+        ...t.lines.map((l) => ({ color_id: l.c.id, size_id: l.s.id, qty: l.qty, print_type: l.print_type })),
+        ...t.own.map((l) => ({ own: true, garment: l.garment, color: l.color, hex: l.hex, size: l.size, qty: l.qty, print_type: l.print_type })),
+      ], note: P.note };
       try {
         const editing = P.editing;
         const r = await api(editing ? `/api/ws/orders/${editing.id}` : '/api/ws/orders', { method: editing ? 'PUT' : 'POST', body });
+        const failed = [];
+        for (const f of P.files) {
+          try { await api(`/api/ws/orders/${r.order.id}/files`, { body: { name: f.name, data: f.data } }); } catch (err) { failed.push(`${f.name}: ${err.message}`); }
+        }
+        if (failed.length) toast('err', 'A file did not upload', `${failed.join(' · ')} — open the order to try again`, 8000);
         clearCart();
         closeSheet();
         await loadOrders();
@@ -319,7 +458,7 @@
           <div class="main">
             <div class="top"><span class="inv">${o.order_no}</span>${statusPill(o.status)}${ACTIVE.includes(o.status) ? (o.paid ? '<span class="pill paid">Paid</span>' : '<span class="pill unpaid">Not paid</span>') : ''}</div>
             ${idx >= 0 ? `<div class="mini-steps">${FLOW.map((s, i) => `<i class="${i <= idx ? 'on' : ''}"></i>`).join('')}</div>` : ''}
-            <div class="when">${dateFmt(o.created_at)} · ${pcs} pcs${o.due_date && idx < 4 && idx >= 0 ? ` · ready by ${esc(o.due_date)}` : ''}</div>
+            <div class="when">${dateFmt(o.created_at)} · ${pcs} pcs${o.own_pcs ? ` · 🎨 ${o.own_pcs} yours` : ''}${o.due_date && idx < 4 && idx >= 0 ? ` · ready by ${esc(o.due_date)}` : ''}</div>
           </div>
           <div class="amt"><b class="num">${fmt(o.total)}</b><span class="muted" style="font-size:12px">${esc(cur())}</span></div>
         </button>`;
@@ -349,27 +488,50 @@
         cancelled: 'This order was cancelled. · <span class="ar">تم إلغاء الطلب</span>',
       }[st]}${o.due_date && !closed && st !== 'delivered' ? `<br><b>Ready by ${esc(o.due_date)}</b> · <span class="ar">الموعد</span>` : ''}</p>
       ${o.customer_note ? `<div class="gift-card"><div class="gc-h">Note</div><div class="gc-m" dir="auto">${esc(o.customer_note)}</div></div>` : ''}
-      <div class="detail-items">${o.items.map((it) => `<div class="cart-line"><div class="sw" style="background:${esc(it.hex)};color:${isLight(it.hex) ? '#2E2D4C' : '#fff'}">${esc(it.size === 'ONE SIZE' ? '1SZ' : it.size)}</div>
-        <div class="info"><div class="t">${it.qty} × ${esc(it.product)} · ${esc(it.color)} ${esc(it.size)}</div><div class="s">${PRINT[it.print_type][0]} · ${fmt(it.unit_price + it.print_price)} each</div></div>
+      ${o.own_pcs && !closed ? `<div class="own-recv ${o.own_received >= o.own_pcs ? 'all' : ''}"><div><b>📦 Your pieces: we got ${o.own_received} of ${o.own_pcs}</b>
+        <small>${o.own_received >= o.own_pcs ? 'All here — thank you! · <span class="ar">وصلوا كلهن</span>' : `Send or bring us ${o.own_pcs - o.own_received} more · <span class="ar">باقي ${o.own_pcs - o.own_received} قطعة</span>`}</small></div>
+        <div class="bar"><i style="width:${Math.round((o.own_received / o.own_pcs) * 100)}%"></i></div></div>` : ''}
+      <div class="detail-items">${o.items.map((it) => `<div class="cart-line"><div class="sw" style="background:${esc(it.hex)};color:${isLight(it.hex) ? '#2E2D4C' : '#fff'}">${esc(it.size === 'ONE SIZE' ? '1SZ' : it.size === 'Mixed' ? 'MIX' : it.size)}</div>
+        <div class="info"><div class="t" dir="auto">${it.qty} × ${esc(it.product)} · ${esc(it.color)} ${esc(it.size)}</div><div class="s">${it.own ? '<b class="own-tag">Your piece</b> · ' : ''}${PRINT[it.print_type][0]} · ${fmt(it.unit_price + it.print_price)} each</div></div>
         <div class="p">${fmt(it.line_total)}</div></div>`).join('')}</div>
       <div class="totals">
         ${o.discount ? `<div class="line"><span>Subtotal</span><span class="num">${fmt(o.subtotal)}</span></div><div class="line"><span>Discount · <span class="ar">خصم</span></span><span class="num">−${fmt(o.discount)}</span></div>` : ''}
         <div class="grand"><span>Total · ${pcs} pcs</span><b class="num" ${closed ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${fmt(o.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
       </div>
+      ${o.files.length || !closed && st !== 'delivered' ? `<div class="label" style="margin:16px 0 8px">Design files · <span class="ar">ملفات التصميم</span></div>
+        <div class="files">${o.files.map((f) => fileChip(f, `/api/ws/orders/${o.id}/files/${f.id}`, st === 'pending' ? f.id : null)).join('') || '<p class="muted" style="font-size:13px;margin:0 0 8px">No design attached yet. · <span class="ar">ما في تصميم</span></p>'}</div>
+        ${!closed && st !== 'delivered' ? `<label class="btn block file-btn" style="margin-bottom:12px">${icon.clip}Add design file · <span class="ar">ارفع ملف</span><input type="file" data-add-file accept="image/png,image/jpeg,image/webp,application/pdf" multiple hidden /></label>` : ''}` : ''}
       ${o.has_invoice && ACTIVE.includes(st) ? `<a class="btn primary block" href="/api/ws/orders/${o.id}/invoice.pdf" download="YallaWear-${o.order_no}.pdf">${icon.down}Download invoice · <span class="ar">تحميل الفاتورة</span></a>` : ACTIVE.includes(st) ? '<p class="muted" style="font-size:13px">The invoice will be here soon. · <span class="ar">الفاتورة قريباً</span></p>' : ''}
       ${st === 'pending' ? `<div class="actions-grid" style="margin-top:10px"><button class="btn" data-edit>${icon.edit}Change order</button><button class="btn danger" data-cancel>Cancel order</button></div>` : ''}
       ${contact ? `<a class="btn wa block" style="margin-top:10px" href="${contact}" target="_blank" rel="noopener">${icon.wa}Message Yalla Wear about this order</a>` : ''}
       ${o.events.length ? `<div class="label" style="margin:22px 0 10px">History · <span class="ar">السجل</span></div><div class="ws-events">${o.events.slice().reverse().map((e) => `
-        <div class="ws-ev"><i></i><div><b>${e.kind === 'status' ? STATUS[e.status][0] : e.kind === 'created' ? 'Order sent' : e.kind === 'paid' ? esc(e.note) : 'Order changed'}</b>
+        <div class="ws-ev"><i></i><div><b>${e.kind === 'status' ? STATUS[e.status][0] : e.kind === 'created' ? 'Order sent' : e.kind === 'paid' || e.kind === 'received' ? esc(e.note) : 'Order changed'}</b>
         <small>${dateFmt(e.created_at)}${e.kind === 'edited' && e.note ? ' · ' + esc(e.note) : ''}</small></div></div>`).join('')}</div>` : ''}`;
     const ed = $('[data-edit]', sh);
     if (ed) ed.onclick = () => {
       // load the order back into the grid
-      P.cart = {}; P.print = {};
-      for (const it of o.items) { const k = `${it.color_id}:${it.size_id}`; P.cart[k] = (P.cart[k] || 0) + it.qty; P.print[it.product_id] = it.print_type; }
+      P.cart = {}; P.print = {}; P.own = []; P.files = [];
+      for (const it of o.items) {
+        if (it.own) { P.own.push({ garment: it.product, color: it.color, hex: it.hex, size: it.size, qty: it.qty, print_type: it.print_type }); continue; }
+        const k = `${it.color_id}:${it.size_id}`; P.cart[k] = (P.cart[k] || 0) + it.qty; P.print[it.product_id] = it.print_type;
+      }
+      P.mode = P.own.length && !Object.keys(P.cart).length ? 'own' : 'stock';
       P.note = o.customer_note; P.editing = { id: o.id, no: o.order_no };
       saveCart(); closeSheet(); P.view = 'shop'; renderShell(); window.scrollTo(0, 0);
     };
+    const af = $('[data-add-file]', sh);
+    if (af) af.onchange = () => busy(af.closest('label'), async () => {
+      let n = 0;
+      for (const f of [...af.files]) {
+        try { const file = await readFile(f); await api(`/api/ws/orders/${o.id}/files`, { body: { name: file.name, data: file.data } }); n++; }
+        catch (err) { toast('err', 'Could not add it', err.message, 6000); }
+      }
+      if (n) { closeSheet(); openOrder(o.id); toast('ok', n === 1 ? 'Design added ✓' : `${n} files added ✓`); }
+    });
+    $$('[data-frm]', sh).forEach((b) => (b.onclick = () => busy(b, async () => {
+      if (!confirm('Remove this file? · حذف الملف؟')) return;
+      try { await api(`/api/ws/orders/${o.id}/files/${b.dataset.frm}`, { method: 'DELETE' }); closeSheet(); openOrder(o.id); } catch (err) { toast('err', err.message); }
+    })));
     const cn = $('[data-cancel]', sh);
     if (cn) cn.onclick = () => busy(cn, async () => {
       if (!confirm(`Cancel ${o.order_no}? · إلغاء الطلب؟`)) return;
