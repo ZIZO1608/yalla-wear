@@ -1789,7 +1789,7 @@
       <div class="main">
         <div class="top"><span class="inv">${o.order_no}</span><span class="who" dir="auto">${esc(o.business_name)}</span>${wsPill(o.status)}${WS_ACTIVE.includes(o.status) && !o.paid ? '<span class="pill unpaid">Not paid</span>' : ''}</div>
         <div class="items">${o.items.slice(0, 6).map((i) => `<span class="mini"><i class="sw" style="background:${esc(i.hex)}"></i>${i.qty}× ${esc(i.product)} ${esc(i.color)} ${esc(i.size)}</span>`).join('')}${o.items.length > 6 ? `<span class="mini">+${o.items.length - 6} more</span>` : ''}</div>
-        <div class="when">${dateFmt(o.created_at)}${o.own_pcs ? ` · 🎨 ${o.own_pcs} their pieces (got ${o.own_received})` : ''}${o.files && o.files.length ? ` · 📎 ${o.files.length}` : ''}${o.due_date ? ` · due ${esc(o.due_date)}` : ''}${o.customer_note ? ` · “${esc(o.customer_note.slice(0, 60))}”` : ''}</div>
+        <div class="when">${dateFmt(o.created_at)}${o.own_pcs ? ` · 🎨 ${o.own_pcs} their pieces (got ${o.own_received})` : ''}${o.designs && o.designs.length ? ` · 🎨 ${o.designs.map((d) => d.name || '?').join(', ')}${o.designs_missing ? ' ⚠️' : ''}` : ''}${o.files && o.files.length ? ` · 📎 ${o.files.length}` : ''}${o.due_date ? ` · due ${esc(o.due_date)}` : ''}${o.customer_note ? ` · “${esc(o.customer_note.slice(0, 60))}”` : ''}</div>
       </div>
       <div class="amt"><b class="num">${fmt(o.total)}</b><span class="muted" style="font-size:12px">${pcs} pcs · ${esc(cur())}</span></div>
     </button>`;
@@ -1911,11 +1911,19 @@
           ${o.discount ? `<div class="line"><span>Subtotal</span><span class="num">${fmt(o.subtotal)}</span></div><div class="line"><span>Discount</span><span class="num">−${fmt(o.discount)}</span></div>` : ''}
           <div class="grand"><span>Total · ${pcs} pcs</span><b class="num" ${closed ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${fmt(o.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
         </div>
-        <div class="label" style="margin:16px 0 8px">Design files${o.files.length ? ` · ${o.files.length}` : ''}</div>
+        ${o.designs.length ? `<div class="label" style="margin:16px 0 8px">🎨 What we print${o.designs_missing ? ` · <span style="color:var(--red)">${o.designs_missing} not complete</span>` : ''}</div>
+        <div class="rv-designs">${o.designs.map((d, di) => {
+          const sides = ['front', ...(d.print_type === 'front_back' ? ['back'] : [])];
+          return `<div class="rv-design ${d.complete ? '' : 'bad'}">
+            <div class="rv-thumbs">${sides.map((side) => { const f = d[side]; const url = f ? `/api/ws-design-files/${f.id}` : ''; return `<a class="rv-th" ${f ? `href="${url}" target="_blank" rel="noopener"` : ''}>${f ? (/^image\//.test(f.mime) ? `<img src="${url}" alt="">` : '<span class="pdf">PDF</span>') : '<span class="plus">?</span>'}<small>${side === 'front' ? 'Front' : 'Back'}</small></a>`; }).join('')}</div>
+            <div class="rv-info"><b dir="auto">${esc(d.name || (d.key ? 'No name' : 'No design yet'))}</b><small>${d.pcs} pcs · ${d.print_type === 'front_back' ? 'Front + back' : 'Front only'}</small><small dir="auto">${esc(d.lines.join(' · '))}</small>
+              <div class="rv-up">${d.key ? sides.map((side) => `<label class="btn sm">${d[side] ? 'Replace' : 'Add'} ${side}<input type="file" data-dz="${di}" data-dside="${side}" accept="image/png,image/jpeg,image/webp,application/pdf" hidden /></label>`).join('') + sides.filter((x) => d[x]).map((side) => `<a class="btn sm" href="/api/ws-design-files/${d[side].id}" download="${esc((d.name || 'design') + '-' + side)}">${icon.down}${side}</a>`).join('') : ''}<button class="btn sm" data-dname="${di}">${d.key ? 'Rename' : 'Name this design'}</button></div></div></div>`;
+        }).join('')}</div>` : ''}
+        <div class="label" style="margin:16px 0 8px">Other files${o.files.length ? ` · ${o.files.length}` : ''}</div>
         <div class="files">${o.files.map((f) => `<div class="file-chip">${/^image\//.test(f.mime) ? `<img src="/api/ws-orders/${o.id}/files/${f.id}" alt="">` : '<span class="pdf">PDF</span>'}
           <div class="fn"><a href="/api/ws-orders/${o.id}/files/${f.id}" target="_blank" rel="noopener" dir="auto">${esc(f.name)}</a><small>${fmt(Math.max(1, Math.round(f.size / 1024)))} KB · ${esc(f.by_name)}</small></div>
           <a class="icon-btn" href="/api/ws-orders/${o.id}/files/${f.id}" download="${esc(f.name)}" aria-label="Download">${icon.down}</a><button class="x" data-frm="${f.id}" aria-label="Remove">×</button></div>`).join('') || '<p class="muted" style="font-size:13px;margin:0 0 8px">No design files yet.</p>'}</div>
-        <label class="btn block file-btn" style="margin-bottom:12px">${icon.plus}Add design file<input type="file" data-add-file accept="image/png,image/jpeg,image/webp,application/pdf" multiple hidden /></label>
+        <label class="btn block file-btn" style="margin-bottom:12px">${icon.plus}Add a file<input type="file" data-add-file accept="image/png,image/jpeg,image/webp,application/pdf" multiple hidden /></label>
         ${next ? `<button class="btn primary block" data-next="${next[0]}">${next[1]}</button>` : ''}
         ${closed ? '<button class="btn block" data-next="pending">Reopen as pending</button>' : ''}
         <div class="actions-grid" style="margin-top:10px">
@@ -1957,6 +1965,28 @@
       });
       const rs = $('[data-recv-save]', sh); if (rs) rs.onclick = () => saveRecv(Math.max(0, Number($('[data-recv]', sh).value) || 0), rs);
       const ra = $('[data-recv-all]', sh); if (ra) ra.onclick = () => saveRecv(o.own_pcs, ra);
+      $$('[data-dname]', sh).forEach((b) => (b.onclick = async () => {
+        const d = o.designs[+b.dataset.dname];
+        const name = (prompt('Design name (the wholesaler sees it)', d.name || '') || '').trim();
+        if (!name) return;
+        try {
+          const r = await api(`/api/ws-orders/${o.id}/designs`, { body: d.key ? { design_key: d.key, name } : { name, item_ids: d.item_ids } });
+          o = r.order; if (sh.isConnected) paint();
+          toast('ok', 'Design saved ✓', d.key ? name : 'Now add its images');
+        } catch (e) { toast('err', e.message); }
+      }));
+      $$('[data-dz]', sh).forEach((inp) => (inp.onchange = () => busy(inp.closest('label'), async () => {
+        const d = o.designs[+inp.dataset.dz], f = inp.files[0];
+        if (!f) return;
+        if (!/^(image\/(png|jpeg|webp)|application\/pdf)$/.test(f.type)) return toast('err', 'PNG, JPG, WEBP or PDF only');
+        if (f.size > 8 * 1024 * 1024) return toast('err', 'That file is too big (8 MB max)');
+        try {
+          const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+          o = (await api(`/api/ws-orders/${o.id}/design-files`, { body: { design_key: d.key, side: inp.dataset.dside, name: f.name, data } })).order;
+          if (sh.isConnected) paint();
+          toast('ok', `${inp.dataset.dside === 'front' ? 'Front' : 'Back'} image saved ✓`, d.name);
+        } catch (e) { toast('err', 'Could not save it', e.message); }
+      })));
       const af = $('[data-add-file]', sh);
       af.onchange = () => busy(af.closest('label'), async () => {
         for (const f of [...af.files]) {
@@ -1996,7 +2026,7 @@
   // edit every part of an order (or write a new one for a wholesaler)
   function openWsOrderEditor(o, onSaved) {
     const isNew = !o.id;
-    const D = { items: o.items.map((i) => ({ id: i.id, own: !!i.own, garment: i.product, color: i.color, size: i.size, product_id: i.product_id, color_id: i.color_id, size_id: i.size_id, qty: i.qty, unit_price: i.unit_price, print_type: i.print_type, print_price: i.print_price, saved_print: i.print_type, name: `${i.product} · ${i.color} ${i.size}`, hex: i.hex })) };
+    const D = { items: o.items.map((i) => ({ id: i.id, own: !!i.own, garment: i.product, color: i.color, size: i.size, product_id: i.product_id, color_id: i.color_id, size_id: i.size_id, qty: i.qty, unit_price: i.unit_price, print_type: i.print_type, print_price: i.print_price, saved_print: i.print_type, design_key: i.design_key, design_name: i.design_name, name: `${i.product} · ${i.color} ${i.size}`, hex: i.hex })) };
     const st0 = S.data.settings || {};
     const ownFee = (t) => Number(t === 'front_back' ? st0.ws_own_front_back : st0.ws_own_front) || 0;
     const OWN = { garment: 'Hoodie', color: '', size: 'Mixed', qty: 1, print_type: 'front' };
@@ -2101,8 +2131,8 @@
     $('[data-save]', sh).onclick = (ev) => busy(ev.currentTarget, async () => {
       const body = {
         items: D.items.map((l) => (l.own
-          ? { id: l.id, own: true, garment: l.garment, color: l.color, size: l.size, hex: l.hex, qty: l.qty, unit_price: l.unit_price, print_type: l.print_type }
-          : { id: l.id, color_id: l.color_id, size_id: l.size_id, qty: l.qty, unit_price: l.unit_price, print_type: l.print_type })),
+          ? { id: l.id, own: true, garment: l.garment, color: l.color, size: l.size, hex: l.hex, qty: l.qty, unit_price: l.unit_price, print_type: l.print_type, ...(l.design_key ? { design_key: l.design_key, design_name: l.design_name } : {}) }
+          : { id: l.id, color_id: l.color_id, size_id: l.size_id, qty: l.qty, unit_price: l.unit_price, print_type: l.print_type, ...(l.design_key ? { design_key: l.design_key, design_name: l.design_name } : {}) })),
         discount: Number($('[data-discount]', sh).value) || 0, due_date: $('[data-due]', sh).value,
         customer_note: $('[data-cnote]', sh).value, admin_note: $('[data-anote]', sh).value, paid: $('[data-paid-sw]', sh).checked,
       };

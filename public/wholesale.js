@@ -10,7 +10,7 @@
   const TZ = 'Asia/Damascus';
   const dateFmt = (iso) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso)).replace(',', ' ·');
   const dateOnly = (iso) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(iso));
-  const P = { me: null, shop: null, cat: null, orders: null, view: 'shop', mode: 'stock', cart: {}, print: {}, own: [], files: [], note: '', editing: null,
+  const P = { me: null, shop: null, cat: null, orders: null, view: 'shop', mode: 'stock', cart: {}, print: {}, own: [], designs: {}, pdesign: {}, note: '', editing: null,
     draft: { garment: 'Hoodie', color: 'Black', hex: '#1D1D1F', size: 'M', qty: '', print_type: 'front' } };
   // their own pieces: what they can pick when they bring their hoodies for us to print
   const GARMENTS = [['Hoodie', 'هودي'], ['Zip hoodie', 'هودي سحاب'], ['Sweatshirt', 'كنزة'], ['T-shirt', 'تيشيرت']];
@@ -102,11 +102,99 @@
 
   // ---------- cart (kept on this phone so a half-made order is not lost) ----------
   const cartKey = () => `yw-ws-cart-${P.me ? P.me.id : 0}`;
-  const saveCart = () => { try { localStorage.setItem(cartKey(), JSON.stringify({ cart: P.cart, print: P.print, own: P.own, note: P.note, editing: P.editing })); } catch { /* private mode */ } };
+  const saveCart = () => { try { localStorage.setItem(cartKey(), JSON.stringify({ cart: P.cart, print: P.print, own: P.own, designs: P.designs, pdesign: P.pdesign, note: P.note, editing: P.editing })); } catch { /* private mode */ } };
   const loadCart = () => {
-    try { const v = JSON.parse(localStorage.getItem(cartKey()) || 'null'); if (v) Object.assign(P, { cart: v.cart || {}, print: v.print || {}, own: Array.isArray(v.own) ? v.own : [], note: v.note || '', editing: v.editing || null }); } catch { /* ignore */ }
+    try { const v = JSON.parse(localStorage.getItem(cartKey()) || 'null'); if (v) Object.assign(P, { cart: v.cart || {}, print: v.print || {}, own: Array.isArray(v.own) ? v.own : [], designs: v.designs || {}, pdesign: v.pdesign || {}, note: v.note || '', editing: v.editing || null }); } catch { /* ignore */ }
   };
-  const clearCart = () => { P.cart = {}; P.print = {}; P.own = []; P.files = []; P.note = ''; P.editing = null; saveCart(); };
+  const clearCart = () => { P.cart = {}; P.print = {}; P.own = []; P.designs = {}; P.pdesign = {}; P.note = ''; P.editing = null; saveCart(); };
+
+  // ---------- designs: every print has a name + a front image (+ a back image for front + back) ----------
+  const newKey = () => (Date.now().toString(36) + Math.random().toString(36).slice(2, 12)).replace(/[^a-z0-9]/g, '').slice(0, 24);
+  const designOf = (key) => (P.designs[key] = P.designs[key] || { name: '', front: null, back: null });
+  const productKey = (pid) => P.pdesign[pid] || (P.pdesign[pid] = newKey());
+  const ensureOwnKeys = () => { for (const l of P.own) if (!l.design_key) l.design_key = newKey(); };
+  const fileUrl = (f) => `/api/ws/design-files/${f.id}`;
+  // the designs the order needs right now, and what is still missing on each
+  function designGroups() {
+    ensureOwnKeys();
+    const map = new Map();
+    const add = (key, pt, what, qty) => {
+      const g = map.get(key) || { key, back: false, what: [], pcs: 0 };
+      if (pt === 'front_back') g.back = true;
+      if (!g.what.includes(what)) g.what.push(what);
+      g.pcs += qty;
+      map.set(key, g);
+    };
+    for (const l of cartLines()) if (l.print_type !== 'none') add(productKey(l.p.id), l.print_type, l.p.name, l.qty);
+    for (const l of P.own) if (l.qty > 0) add(l.design_key, l.print_type, `${l.garment} ${l.color}`, l.qty);
+    return [...map.values()].map((g) => {
+      const d = designOf(g.key);
+      const missing = [];
+      if (!String(d.name || '').trim()) missing.push(['name', 'الاسم']);
+      if (!d.front) missing.push(['front image', 'صورة الأمام']);
+      if (g.back && !d.back) missing.push(['back image', 'صورة الخلف']);
+      return { ...g, d, missing };
+    });
+  }
+  const isImg = (f) => f && /^image\//.test(f.mime);
+  const slotHTML = (key, side) => {
+    const f = designOf(key)[side];
+    return `<label class="dc-slot ${f ? 'has' : ''}" data-side="${side}">
+      ${f ? (isImg(f) ? `<img src="${esc(fileUrl(f))}" alt="">` : '<span class="pdf">PDF</span>') : '<span class="plus">+</span>'}
+      <span class="dc-side">${side === 'front' ? 'FRONT · <span class="ar">أمام</span>' : 'BACK · <span class="ar">خلف</span>'}</span>
+      <small>${f ? 'Tap to change · <span class="ar">تغيير</span>' : 'Add image · <span class="ar">أضف صورة</span>'}</small>
+      <input type="file" data-dfile accept="image/png,image/jpeg,image/webp,application/pdf" hidden />
+    </label>`;
+  };
+  const statusHTML = (key, back) => {
+    const d = designOf(key);
+    const miss = [!String(d.name || '').trim() && 'name', !d.front && 'front', back && !d.back && 'back'].filter(Boolean);
+    return miss.length ? `<span class="pill unpaid">Missing: ${miss.join(', ')}</span>` : '<span class="pill paid">✓ Ready</span>';
+  };
+  // owner: "p:<product id>" or "o:<own line index>" — who uses this design
+  function designCardHTML(key, printType, owner) {
+    const d = designOf(key);
+    const back = printType === 'front_back';
+    const others = designGroups().filter((g) => g.key !== key && String(g.d.name || '').trim());
+    return `<div class="design-card" data-dk="${key}" data-back="${back ? 1 : 0}" data-owner="${owner}">
+      <div class="dc-head"><b>🎨 What we print · <span class="ar">شو منطبع</span></b><span data-dstatus>${statusHTML(key, back)}</span></div>
+      <input class="input" data-dname maxlength="60" dir="auto" placeholder="Design name — e.g. Lion logo · اسم التصميم" value="${esc(d.name)}" />
+      <div class="dc-slots ${back ? 'two' : ''}">${slotHTML(key, 'front')}${back ? slotHTML(key, 'back') : ''}</div>
+      <p class="dc-help">${back ? 'Add the front AND the back image. · <span class="ar">ارفع صورة الأمام والخلف</span>' : 'Front print only — add the front image. · <span class="ar">طباعة أمامية: ارفع صورة الأمام</span>'}</p>
+      ${others.length ? `<select class="input dc-same" data-same><option value="">Use another design…  · نفس تصميم آخر</option>${others.map((g) => `<option value="${g.key}">Same as “${esc(g.d.name)}”</option>`).join('')}<option value="__new">New design · تصميم جديد</option></select>` : ''}
+    </div>`;
+  }
+  function bindDesignCards(root) {
+    $$('.design-card', root).forEach((card) => {
+      const key = card.dataset.dk, back = card.dataset.back === '1';
+      const refresh = () => { $('[data-dstatus]', card).innerHTML = statusHTML(key, back); };
+      $('[data-dname]', card).oninput = (e) => { designOf(key).name = e.target.value; saveCart(); refresh(); };
+      $$('[data-dfile]', card).forEach((inp) => (inp.onchange = () => {
+        const slot = inp.closest('.dc-slot'), side = slot.dataset.side, f = inp.files[0];
+        if (!f) return;
+        busy(slot, async () => {
+          try {
+            const file = await readFile(f);
+            const r = await api('/api/ws/design-files', { body: { design_key: key, side, name: file.name, data: file.data } });
+            designOf(key)[side] = r.file;
+            saveCart();
+            slot.outerHTML = slotHTML(key, side);
+            refresh();
+            bindDesignCards(card.parentNode);
+            toast('ok', `${side === 'front' ? 'Front' : 'Back'} image added ✓`, designOf(key).name || f.name, 2200);
+          } catch (err) { toast('err', 'Could not add the image', err.message, 6000); inp.value = ''; }
+        });
+      }));
+      const same = $('[data-same]', card);
+      if (same) same.onchange = () => {
+        if (!same.value) return;
+        const k = same.value === '__new' ? newKey() : same.value;
+        const [kind, id] = card.dataset.owner.split(':');
+        if (kind === 'p') P.pdesign[id] = k; else if (P.own[+id]) P.own[+id].design_key = k;
+        saveCart(); paintCartBar();
+      };
+    });
+  }
 
   const prod = (id) => P.cat.products.find((p) => p.id === id);
   const colorsOf = (pid) => P.cat.colors.filter((c) => c.product_id === pid);
@@ -211,40 +299,83 @@
       ${prods.length ? prods.map((p) => {
         const cs = colorsOf(p.id), ss = sizesOf(p.id);
         const pt = P.print[p.id] || 'none';
-        const n = cs.reduce((t, c) => t + ss.reduce((u, s) => u + (P.cart[`${c.id}:${s.id}`] || 0), 0), 0);
+        const qOf = (c, s) => P.cart[`${c.id}:${s.id}`] || 0;
+        const n = cs.reduce((t, c) => t + ss.reduce((u, s) => u + qOf(c, s), 0), 0);
         const short = p.wholesale_min > 1 && n > 0 && n < p.wholesale_min;
-        return `<section class="wp card" data-p="${p.id}">
-          <div class="wp-head">
-            <div><div class="wp-name">${esc(p.name)}${p.name_ar ? ` <span class="ar">${esc(p.name_ar)}</span>` : ''}</div>
-              <div class="wp-meta"><b class="num">${money(p.wholesale_price)}</b> / piece${p.wholesale_min > 1 ? ` · least ${p.wholesale_min} pcs · <span class="ar">الحد الأدنى ${p.wholesale_min}</span>` : ''}</div></div>
-            <div class="wp-count ${short ? 'short' : n ? 'on' : ''}"><b class="num">${n}</b><small>pcs</small></div>
+        const haveAll = cs.reduce((t, c) => t + ss.reduce((u, s) => u + stockOf(c.id, s.id), 0), 0);
+        return `<section class="wp" data-p="${p.id}">
+          <div class="prod-head">
+            <div class="ph-main">
+              <div class="ph-name">${esc(p.name)}${p.name_ar ? ` <span class="ar">${esc(p.name_ar)}</span>` : ''}</div>
+              <div class="ph-meta"><b class="num">${money(p.wholesale_price)}</b> / piece${p.printable ? ` · print +${fmt(p.print_front)} / +${fmt(p.print_front_back)}` : ''}${showStock ? ` · <span class="num">${haveAll}</span> in stock` : ''}${p.wholesale_min > 1 ? ` · least ${p.wholesale_min}` : ''}</div>
+            </div>
+            <div class="wp-count ${short ? 'short' : n ? 'on' : ''}"><b class="num">${n}</b><small>yours</small></div>
           </div>
-          ${p.printable ? `<div class="seg wp-print">${['none', 'front', 'front_back'].map((t) => `<button class="${pt === t ? 'on' : ''}" data-pt="${t}">${PRINT[t][0]}<small>${t === 'none' ? '+0' : '+' + fmt(printPrice(p, t))}</small></button>`).join('')}</div>` : ''}
-          ${cs.length && ss.length ? `<div class="grid-wrap wp-grid"><table class="stock order-grid">
-            <thead><tr><th></th>${cs.map((c) => `<th><div class="col-head"><i class="sw" style="background:${esc(c.hex)}"></i>${esc(c.name)}${c.name_ar ? `<span class="ar">${esc(c.name_ar)}</span>` : ''}</div></th>`).join('')}</tr></thead>
+          ${cs.length && ss.length ? `<div class="grid-wrap"><table class="stock pick-grid">
+            <colgroup><col class="c-size">${cs.map(() => '<col>').join('')}<col class="c-total"></colgroup>
+            <thead><tr><th></th>${cs.map((c) => `<th><div class="col-head"><i class="sw" style="background:${esc(c.hex)}"></i>${esc(c.name)}</div></th>`).join('')}<th class="tcol-head">Yours</th></tr></thead>
             <tbody>${ss.map((s) => `<tr><th>${esc(s.name === 'ONE SIZE' ? '1SZ' : s.name)}</th>${cs.map((c) => {
-              const k = `${c.id}:${s.id}`, q = P.cart[k] || '', have = stockOf(c.id, s.id);
-              const over = q && showStock && q > have;
-              return `<td><label class="oc ${q ? 'has' : ''}"><input class="num" type="number" min="0" inputmode="numeric" placeholder="0" data-k="${k}" value="${q}" aria-label="${esc(c.name)} ${esc(s.name)}" />
-                <small class="${have ? (over ? 'amber' : '') : 'mto'}">${showStock ? (have ? `${have} left` : 'to make') : (have ? 'in stock' : 'to make')}</small></label></td>`;
-            }).join('')}</tr>`).join('')}</tbody></table></div>` : '<p class="muted">Not available right now.</p>'}
+              const q = qOf(c, s), have = stockOf(c.id, s.id);
+              const cls = q ? 'picked' : have ? (showStock && have <= 2 ? 'low' : '') : 'out';
+              const big = showStock ? have : have ? '✓' : '–';
+              const tag = q ? '' : have ? (showStock && have <= 2 ? 'LOW' : '') : 'MAKE';
+              return `<td><button class="cell num ${cls}" data-pick="${c.id}:${s.id}" aria-label="${esc(c.name)} ${esc(s.name)}: ${have} in stock${q ? `, you picked ${q}` : ''}">${q ? q : big}${tag ? `<span class="tag">${tag}</span>` : ''}${q ? `<span class="pick-of">${showStock ? `of ${have}` : 'yours'}</span>` : ''}</button></td>`;
+            }).join('')}<td class="total-col num ${ss.length && cs.reduce((t, c) => t + qOf(c, s), 0) ? 'on' : ''}">${cs.reduce((t, c) => t + qOf(c, s), 0) || ''}</td></tr>`).join('')}</tbody>
+            <tfoot><tr><th></th>${cs.map((c) => `<td class="num">${ss.reduce((t, s) => t + qOf(c, s), 0) || ''}</td>`).join('')}<td class="grand num">${n}</td></tr></tfoot>
+          </table></div>
+          <div class="legend pick-legend"><span>👆 Tap a box, choose how many · <span class="ar">اضغط على المربع واختار العدد</span></span>
+            <span><i class="lg picked"></i>Yours</span>${showStock ? '<span><i class="lg low"></i>2 or less</span>' : ''}<span><i class="lg out"></i>Made for you</span></div>` : '<p class="muted">Not available right now.</p>'}
+          ${p.printable ? `<div class="own-lbl">Print · <span class="ar">الطباعة</span></div><div class="seg wp-print">${['none', 'front', 'front_back'].map((t) => `<button class="${pt === t ? 'on' : ''}" data-pt="${t}">${PRINT[t][0]}<small>${t === 'none' ? '+0' : '+' + fmt(printPrice(p, t))}</small></button>`).join('')}</div>
+            ${pt !== 'none' ? designCardHTML(productKey(p.id), pt, `p:${p.id}`) : ''}` : ''}
           ${short ? `<p class="wp-warn">Add ${p.wholesale_min - n} more ${esc(p.name)} — the least is ${p.wholesale_min} pieces · <span class="ar">أضف ${p.wholesale_min - n} قطع</span></p>` : ''}
         </section>`;
       }).join('') : '<div class="empty"><b>Nothing to order yet</b>Yalla Wear will add products here soon. · <span class="ar">قريباً</span></div>'}
       <p class="muted portal-help">Pieces we don't have in stock are made for you — we'll confirm the date. · <span class="ar">القطع غير المتوفرة منصنعها إلك ومنأكدلك الموعد</span></p>`;
     bindHead();
+    bindDesignCards($('#view'));
     $$('.wp').forEach((sec) => {
       const pid = Number(sec.dataset.p);
-      $$('[data-pt]', sec).forEach((b) => (b.onclick = () => { P.print[pid] = b.dataset.pt; saveCart(); paintCartBar(); }));
+      $$('[data-pt]', sec).forEach((b) => (b.onclick = () => { P.print[pid] = b.dataset.pt; if (b.dataset.pt !== 'none') productKey(pid); saveCart(); paintCartBar(); }));
+      $$('[data-pick]', sec).forEach((b) => (b.onclick = () => openPick(pid, b.dataset.pick)));
     });
-    $$('[data-k]').forEach((inp) => {
-      inp.addEventListener('input', () => {
-        const v = Math.max(0, Math.floor(Number(inp.value) || 0));
-        if (v) P.cart[inp.dataset.k] = v; else delete P.cart[inp.dataset.k];
-        saveCart(); updateCounts(inp);
-      });
-      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
-    });
+  }
+
+  // choose how many of one color + size (a small sheet with − / + )
+  function openPick(pid, k) {
+    const p = prod(pid);
+    const [cid, sid] = k.split(':').map(Number);
+    const c = P.cat.colors.find((x) => x.id === cid), sz = P.cat.sizes.find((x) => x.id === sid);
+    if (!p || !c || !sz) return;
+    const have = stockOf(cid, sid), showStock = P.cat.show_stock;
+    let q = P.cart[k] || 0;
+    const sh = openSheet(`${sheetHead(`${esc(c.name)} · ${esc(sz.name)}`)}
+      <div class="pick-top"><div class="pick-sw" style="background:${esc(c.hex)};color:${isLight(c.hex) ? '#2E2D4C' : '#fff'}">${esc(sz.name === 'ONE SIZE' ? '1SZ' : sz.name)}</div>
+        <div><div class="pick-name">${esc(p.name)} · ${esc(c.name)} ${esc(sz.name)}</div>
+        <div class="muted">${have ? (showStock ? `<b class="num" style="color:var(--mint)">${have}</b> in stock · <span class="ar">متوفر</span>` : 'In stock · <span class="ar">متوفر</span>') : 'Not in stock — we make it for you · <span class="ar">منصنعها إلك</span>'}</div>
+        <div class="muted">${money(p.wholesale_price)} / piece</div></div></div>
+      <div class="stepper"><button class="st-btn" data-step="-1" aria-label="Less">−</button><input class="num" data-q type="number" min="0" inputmode="numeric" value="${q || ''}" placeholder="0" aria-label="How many" /><button class="st-btn" data-step="1" aria-label="More">+</button></div>
+      <div class="chips pick-quick">${[5, 10, 20, 50].map((x) => `<button class="chip" data-add="${x}">+${x}</button>`).join('')}${have && showStock ? `<button class="chip" data-set="${have}">All ${have}</button>` : ''}</div>
+      <p class="pick-note" data-pnote></p>
+      <div class="actions-grid">${q ? '<button class="btn danger" data-rm>Remove</button>' : '<button class="btn" data-close>Cancel</button>'}<button class="btn primary" data-done>Done ✓</button></div>`);
+    const inp = $('[data-q]', sh);
+    const note = () => {
+      const n = Math.max(0, Math.floor(Number(inp.value) || 0));
+      $('[data-pnote]', sh).innerHTML = !n ? '' : `${n} × ${fmt(p.wholesale_price)} = <b class="num">${money(n * p.wholesale_price)}</b>${showStock && n > have ? `<br><span class="amber">${have} from stock, ${n - have} made for you · <span class="ar">${n - have} للتصنيع</span></span>` : ''}`;
+    };
+    const set = (n) => { inp.value = Math.max(0, Math.min(100000, n)) || ''; note(); };
+    $$('[data-step]', sh).forEach((b) => (b.onclick = () => set((Number(inp.value) || 0) + Number(b.dataset.step))));
+    $$('[data-add]', sh).forEach((b) => (b.onclick = () => set((Number(inp.value) || 0) + Number(b.dataset.add))));
+    $$('[data-set]', sh).forEach((b) => (b.onclick = () => set(Number(b.dataset.set))));
+    inp.oninput = note;
+    const done = () => {
+      const n = Math.max(0, Math.min(100000, Math.floor(Number(inp.value) || 0)));
+      if (n) P.cart[k] = n; else delete P.cart[k];
+      saveCart(); closeSheet(); paintCartBar();
+    };
+    inp.onkeydown = (e) => { if (e.key === 'Enter') done(); };
+    $('[data-done]', sh).onclick = done;
+    const rm = $('[data-rm]', sh); if (rm) rm.onclick = () => { set(0); done(); };
+    note();
   }
   function bindHead() {
     const stop = $('#stop-edit');
@@ -257,6 +388,7 @@
     const d = P.draft;
     const otherColor = !OWN_COLORS.some(([n]) => n === d.color);
     const otherGarment = !GARMENTS.some(([n]) => n === d.garment);
+    ensureOwnKeys();
     const lines = P.own;
     const box = document.createElement('div');
     box.innerHTML = `
@@ -264,7 +396,7 @@
         <div class="wp-name">Print on your own hoodies <span class="ar">منطبع على قطعك</span></div>
         <ol class="own-steps">
           <li><b>1</b><span>Add your pieces below: what they are, color, size, how many. <span class="ar">ضيف قطعك</span></span></li>
-          <li><b>2</b><span>Attach your logo / design when you review the order. <span class="ar">ارفع التصميم</span></span></li>
+          <li><b>2</b><span>For each piece: name the design and add the front image (and the back for front + back). <span class="ar">اسم التصميم وصورة الأمام والخلف</span></span></li>
           <li><b>3</b><span>Send or bring us the pieces — we tell you when we got them. <span class="ar">بعتلنا القطع</span></span></li>
           <li><b>4</b><span>We print and you pick them up. You pay for the print only. <span class="ar">بتدفع الطباعة بس</span></span></li>
         </ol>
@@ -289,13 +421,15 @@
       </section>
       <section class="card own-list">
         <div class="label">Your pieces · <span class="ar">قطعك</span>${lines.length ? ` <span class="muted">· ${lines.reduce((t, l) => t + l.qty, 0)} pcs</span>` : ''}</div>
-        ${lines.length ? lines.map((l, i) => `<div class="cart-line"><div class="sw" style="background:${esc(l.hex)};color:${isLight(l.hex) ? '#2E2D4C' : '#fff'}">${esc(l.size === 'Mixed' ? 'MIX' : l.size)}</div>
+        ${lines.length ? lines.map((l, i) => `<div class="own-item"><div class="cart-line"><div class="sw" style="background:${esc(l.hex)};color:${isLight(l.hex) ? '#2E2D4C' : '#fff'}">${esc(l.size === 'Mixed' ? 'MIX' : l.size)}</div>
           <div class="info"><div class="t" dir="auto">${esc(l.garment)} · ${esc(l.color)} · ${esc(l.size === 'Mixed' ? 'mixed sizes' : l.size)}</div><div class="s">${PRINT[l.print_type][0]} · ${fmt(ownFee(l.print_type))} each</div></div>
           <input class="input num own-line-qty" type="number" min="1" inputmode="numeric" data-olq="${i}" value="${l.qty}" aria-label="How many" />
-          <button class="x" data-orm="${i}" aria-label="Remove">×</button></div>`).join('') : '<p class="muted" style="font-size:13px;margin:6px 0 0">Nothing added yet. · <span class="ar">ما ضفت شي بعد</span></p>'}
+          <button class="x" data-orm="${i}" aria-label="Remove">×</button></div>
+          ${designCardHTML(l.design_key, l.print_type, `o:${i}`)}</div>`).join('') : '<p class="muted" style="font-size:13px;margin:6px 0 0">Nothing added yet. · <span class="ar">ما ضفت شي بعد</span></p>'}
       </section>`;
     $('#view').append(...box.children);
     const v = $('#view');
+    bindDesignCards(v);
     const keep = (fn) => () => { fn(); paintCartBar(); };
     $$('[data-g]', v).forEach((b) => (b.onclick = keep(() => { d.garment = b.dataset.g; })));
     $$('[data-c]', v).forEach((b) => (b.onclick = keep(() => { d.color = b.dataset.c; d.hex = b.dataset.hex; })));
@@ -312,10 +446,14 @@
       if (!String(d.color).trim()) return toast('err', 'Which color?', 'Pick or type it · اختار اللون');
       const same = P.own.find((l) => l.garment === d.garment.trim() && l.color === d.color.trim() && l.size === d.size && l.print_type === d.print_type);
       if (same) same.qty += qty;
-      else P.own.push({ garment: d.garment.trim(), color: d.color.trim(), hex: d.hex, size: d.size, qty, print_type: d.print_type });
+      else {
+        // the same design as the last piece with the same print, if it has one — they can change it
+        const prev = [...P.own].reverse().find((l) => l.print_type === d.print_type);
+        P.own.push({ garment: d.garment.trim(), color: d.color.trim(), hex: d.hex, size: d.size, qty, print_type: d.print_type, design_key: prev ? prev.design_key : newKey() });
+      }
       d.qty = '';
       saveCart(); paintCartBar();
-      toast('ok', `${qty} × ${d.garment} added`, `${d.color} · ${d.size}`, 2200);
+      toast('ok', `${qty} × ${d.garment} added`, 'Now add what we print on it 👇 · أضف التصميم', 3000);
     };
     $$('[data-olq]', v).forEach((inp) => (inp.onchange = () => {
       const q = Math.floor(Number(inp.value) || 0);
@@ -338,92 +476,49 @@
   const fileChip = (f, href, rm) => `<div class="file-chip">${/^image\//.test(f.mime || f.type) && (href || f.data) ? `<img src="${esc(href || f.data)}" alt="">` : '<span class="pdf">PDF</span>'}
     <div class="fn"><a ${href ? `href="${esc(href)}" target="_blank" rel="noopener"` : ''} dir="auto">${esc(f.name)}</a><small>${fmt(Math.max(1, Math.round(f.size / 1024)))} KB</small></div>${rm != null ? `<button class="x" data-frm="${rm}" aria-label="Remove">×</button>` : ''}</div>`;
 
-  // updates the numbers in place (no redraw, so the next box you tap still gets the tap)
-  function updateCounts(inp) {
-    const [cid, sid] = inp.dataset.k.split(':').map(Number);
-    const q = P.cart[inp.dataset.k] || 0, have = stockOf(cid, sid);
-    const label = inp.closest('.oc');
-    label.classList.toggle('has', q > 0);
-    if (P.cat.show_stock && have) { const sm = $('small', label); sm.className = q > have ? 'amber' : ''; sm.textContent = `${have} left`; }
-    const sec = inp.closest('.wp'), p = prod(Number(sec.dataset.p));
-    const n = colorsOf(p.id).reduce((t, c) => t + sizesOf(p.id).reduce((u, s) => u + (P.cart[`${c.id}:${s.id}`] || 0), 0), 0);
-    const short = p.wholesale_min > 1 && n > 0 && n < p.wholesale_min;
-    const box = $('.wp-count', sec);
-    box.className = `wp-count ${short ? 'short' : n ? 'on' : ''}`;
-    $('b', box).textContent = n;
-    let warn = $('.wp-warn', sec);
-    if (short) {
-      if (!warn) { warn = document.createElement('p'); warn.className = 'wp-warn'; sec.appendChild(warn); }
-      warn.innerHTML = `Add ${p.wholesale_min - n} more ${esc(p.name)} — the least is ${p.wholesale_min} pieces · <span class="ar">أضف ${p.wholesale_min - n} قطع</span>`;
-    } else if (warn) warn.remove();
-    const t = cartTotals();
-    let bar = $('.cart-bar');
-    if (!t.pcs) { if (bar) bar.remove(); document.body.classList.remove('has-cart'); return; }
-    if (!bar) {
-      bar = document.createElement('div'); bar.className = 'cart-bar';
-      bar.innerHTML = `<div><b class="num"></b><small>${P.editing ? `Editing ${esc(P.editing.no)}` : 'Your order · <span class="ar">طلبك</span>'}</small></div><button class="btn primary">${P.editing ? 'Review changes' : 'Review order'} ›</button>`;
-      $('button', bar).onclick = openReview;
-      $('nav.tabs').before(bar);
-      document.body.classList.add('has-cart');
-    }
-    $('b', bar).innerHTML = `${t.pcs} pcs · ${fmt(t.total)} <small>${esc(cur())}</small>`;
-  }
-
   function openReview() {
     const t = cartTotals();
     if (!t.pcs) return;
     const short = underMin(t.lines);
     const showStock = P.cat.show_stock;
     const toMake = t.lines.reduce((a, l) => a + Math.max(0, l.qty - stockOf(l.c.id, l.s.id)), 0);
+    const groups = designGroups();
+    const badDesigns = groups.filter((g) => g.missing.length).length;
     const sh = openSheet(`${sheetHead(P.editing ? `Save ${esc(P.editing.no)}` : 'Your order')}
       ${t.own.length && t.lines.length ? '<div class="label" style="margin-bottom:6px">From our stock · <span class="ar">من عنا</span></div>' : ''}
       <div class="cart">${t.lines.map((l) => `<div class="cart-line"><div class="sw" style="background:${esc(l.c.hex)};color:${isLight(l.c.hex) ? '#2E2D4C' : '#fff'}">${esc(l.s.name === 'ONE SIZE' ? '1SZ' : l.s.name)}</div>
-        <div class="info"><div class="t">${l.qty} × ${esc(l.p.name)} · ${esc(l.c.name)} ${esc(l.s.name)}</div><div class="s">${PRINT[l.print_type][0]} · ${fmt(l.unit)} each</div></div>
+        <div class="info"><div class="t">${l.qty} × ${esc(l.p.name)} · ${esc(l.c.name)} ${esc(l.s.name)}</div><div class="s">${PRINT[l.print_type][0]}${l.print_type !== 'none' && designOf(productKey(l.p.id)).name ? ` · “${esc(designOf(productKey(l.p.id)).name)}”` : ''} · ${fmt(l.unit)} each</div></div>
         <div class="p">${fmt(l.unit * l.qty)}</div></div>`).join('')}</div>
       ${t.own.length ? `<div class="label" style="margin:${t.lines.length ? '14px' : '0'} 0 6px">🎨 Your pieces, we print · <span class="ar">قطعك</span></div>
       <div class="cart">${t.own.map((l) => `<div class="cart-line"><div class="sw" style="background:${esc(l.hex)};color:${isLight(l.hex) ? '#2E2D4C' : '#fff'}">${esc(l.size === 'Mixed' ? 'MIX' : l.size)}</div>
-        <div class="info"><div class="t" dir="auto">${l.qty} × ${esc(l.garment)} · ${esc(l.color)} ${esc(l.size === 'Mixed' ? 'mixed sizes' : l.size)}</div><div class="s">Your piece · ${PRINT[l.print_type][0]} · ${fmt(l.unit)} each</div></div>
+        <div class="info"><div class="t" dir="auto">${l.qty} × ${esc(l.garment)} · ${esc(l.color)} ${esc(l.size === 'Mixed' ? 'mixed sizes' : l.size)}</div><div class="s">Your piece · ${PRINT[l.print_type][0]}${designOf(l.design_key).name ? ` · “${esc(designOf(l.design_key).name)}”` : ''} · ${fmt(l.unit)} each</div></div>
         <div class="p">${fmt(l.unit * l.qty)}</div></div>`).join('')}</div>
       <p class="own-note">📦 Send or bring us your ${t.ownPcs} piece${t.ownPcs === 1 ? '' : 's'} — we start printing when they arrive. · <span class="ar">بعتلنا القطع لنبلش طباعة</span></p>` : ''}
-      ${t.own.length || Object.values(P.print).some((x) => x && x !== 'none') ? `<div class="field"><label>${bi('Your design / logo (picture or PDF)', 'التصميم أو اللوغو')}</label>
-        <div class="files" data-files></div>
-        <label class="btn block file-btn">${icon.clip}Attach design · <span class="ar">ارفع ملف</span><input type="file" data-file accept="image/png,image/jpeg,image/webp,application/pdf" multiple hidden /></label></div>` : ''}
+      ${groups.length ? `<div class="label" style="margin:14px 0 8px">🎨 What we print · <span class="ar">شو منطبع</span></div>
+        <div class="rv-designs">${groups.map((g) => `<div class="rv-design ${g.missing.length ? 'bad' : ''}">
+          <div class="rv-thumbs">${['front', ...(g.back ? ['back'] : [])].map((side) => { const f = g.d[side]; return `<div class="rv-th">${f ? (isImg(f) ? `<img src="${esc(fileUrl(f))}" alt="">` : '<span class="pdf">PDF</span>') : '<span class="plus">?</span>'}<small>${side === 'front' ? 'Front' : 'Back'}</small></div>`; }).join('')}</div>
+          <div class="rv-info"><b dir="auto">${esc(g.d.name || 'No name yet')}</b><small dir="auto">${esc(g.what.join(' · '))} · ${g.pcs} pcs · ${g.back ? 'Front + back' : 'Front'}</small>
+            ${g.missing.length ? `<small class="rv-miss">Missing: ${g.missing.map((m) => m[0]).join(', ')} · <span class="ar">ناقص: ${g.missing.map((m) => m[1]).join('، ')}</span></small>` : ''}</div></div>`).join('')}</div>
+        ${badDesigns ? `<div class="wp-warn box">Finish ${badDesigns === 1 ? 'the design' : `${badDesigns} designs`} before sending — close this and fill the 🎨 boxes. · <span class="ar">كمّل التصميم قبل الإرسال</span></div>` : ''}` : ''}
       ${short.length ? `<div class="wp-warn box">${short.map((x) => `${esc(x.p.name)}: the least is ${x.p.wholesale_min} pieces (you have ${x.n})`).join('<br>')}</div>` : ''}
       ${showStock && toMake ? `<p class="muted" style="font-size:13px">${toMake} piece${toMake === 1 ? '' : 's'} will be made for you · <span class="ar">${toMake} قطع للتصنيع</span></p>` : ''}
       <div class="field"><label>${bi('Note for Yalla Wear (date, delivery, design…)', 'ملاحظة')}</label><textarea class="input" data-note rows="2" maxlength="500" dir="auto" placeholder="Optional">${esc(P.note)}</textarea></div>
       <div class="totals"><div class="line"><span>${t.pcs} pieces</span><span class="num">${fmt(t.total)}</span></div>
         <div class="grand"><span>Total · <span class="ar">المجموع</span></span><b class="num">${fmt(t.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div></div>
       <p class="muted" style="font-size:12px;margin:-4px 0 12px">Yalla Wear confirms the final price and date when they accept your order. · <span class="ar">منأكد السعر والموعد عند القبول</span></p>
-      <button class="btn primary block" data-send ${short.length ? 'disabled' : ''}>${P.editing ? 'Save changes' : 'Send order'} · <span class="ar">${P.editing ? 'حفظ' : 'إرسال الطلب'}</span></button>`);
+      <button class="btn primary block" data-send ${short.length || badDesigns ? 'disabled' : ''}>${P.editing ? 'Save changes' : 'Send order'} · <span class="ar">${P.editing ? 'حفظ' : 'إرسال الطلب'}</span></button>`);
     $('[data-note]', sh).oninput = (e) => { P.note = e.target.value; saveCart(); };
-    const paintFiles = () => {
-      const el = $('[data-files]', sh);
-      if (!el) return;
-      el.innerHTML = P.files.map((f, i) => fileChip(f, null, i)).join('');
-      $$('[data-frm]', el).forEach((b) => (b.onclick = () => { P.files.splice(+b.dataset.frm, 1); paintFiles(); }));
-    };
-    const fin = $('[data-file]', sh);
-    if (fin) fin.onchange = async () => {
-      for (const f of [...fin.files]) {
-        if (P.files.length >= 8) { toast('err', 'Up to 8 files'); break; }
-        try { P.files.push(await readFile(f)); } catch (err) { toast('err', err.message); }
-      }
-      fin.value = ''; paintFiles();
-    };
-    paintFiles();
     $('[data-send]', sh).onclick = (e) => busy(e.currentTarget, async () => {
       const body = { items: [
-        ...t.lines.map((l) => ({ color_id: l.c.id, size_id: l.s.id, qty: l.qty, print_type: l.print_type })),
-        ...t.own.map((l) => ({ own: true, garment: l.garment, color: l.color, hex: l.hex, size: l.size, qty: l.qty, print_type: l.print_type })),
+        ...t.lines.map((l) => {
+          const key = l.print_type !== 'none' ? productKey(l.p.id) : '';
+          return { color_id: l.c.id, size_id: l.s.id, qty: l.qty, print_type: l.print_type, design_key: key, design_name: key ? designOf(key).name.trim() : '' };
+        }),
+        ...t.own.map((l) => ({ own: true, garment: l.garment, color: l.color, hex: l.hex, size: l.size, qty: l.qty, print_type: l.print_type, design_key: l.design_key, design_name: designOf(l.design_key).name.trim() })),
       ], note: P.note };
       try {
         const editing = P.editing;
         const r = await api(editing ? `/api/ws/orders/${editing.id}` : '/api/ws/orders', { method: editing ? 'PUT' : 'POST', body });
-        const failed = [];
-        for (const f of P.files) {
-          try { await api(`/api/ws/orders/${r.order.id}/files`, { body: { name: f.name, data: f.data } }); } catch (err) { failed.push(`${f.name}: ${err.message}`); }
-        }
-        if (failed.length) toast('err', 'A file did not upload', `${failed.join(' · ')} — open the order to try again`, 8000);
         clearCart();
         closeSheet();
         await loadOrders();
@@ -498,9 +593,13 @@
         ${o.discount ? `<div class="line"><span>Subtotal</span><span class="num">${fmt(o.subtotal)}</span></div><div class="line"><span>Discount · <span class="ar">خصم</span></span><span class="num">−${fmt(o.discount)}</span></div>` : ''}
         <div class="grand"><span>Total · ${pcs} pcs</span><b class="num" ${closed ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${fmt(o.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
       </div>
-      ${o.files.length || !closed && st !== 'delivered' ? `<div class="label" style="margin:16px 0 8px">Design files · <span class="ar">ملفات التصميم</span></div>
-        <div class="files">${o.files.map((f) => fileChip(f, `/api/ws/orders/${o.id}/files/${f.id}`, st === 'pending' ? f.id : null)).join('') || '<p class="muted" style="font-size:13px;margin:0 0 8px">No design attached yet. · <span class="ar">ما في تصميم</span></p>'}</div>
-        ${!closed && st !== 'delivered' ? `<label class="btn block file-btn" style="margin-bottom:12px">${icon.clip}Add design file · <span class="ar">ارفع ملف</span><input type="file" data-add-file accept="image/png,image/jpeg,image/webp,application/pdf" multiple hidden /></label>` : ''}` : ''}
+      ${o.designs.length ? `<div class="label" style="margin:16px 0 8px">🎨 What we print · <span class="ar">شو منطبع</span></div>
+        <div class="rv-designs">${o.designs.map((d) => `<div class="rv-design ${d.complete ? '' : 'bad'}">
+          <div class="rv-thumbs">${['front', ...(d.print_type === 'front_back' ? ['back'] : [])].map((side) => { const f = d[side]; return `<a class="rv-th" ${f ? `href="${esc(fileUrl(f))}" target="_blank" rel="noopener"` : ''}>${f ? (isImg(f) ? `<img src="${esc(fileUrl(f))}" alt="">` : '<span class="pdf">PDF</span>') : '<span class="plus">?</span>'}<small>${side === 'front' ? 'Front' : 'Back'}</small></a>`; }).join('')}</div>
+          <div class="rv-info"><b dir="auto">${esc(d.name || 'Design')}</b><small>${d.pcs} pcs · ${d.print_type === 'front_back' ? 'Front + back' : 'Front'}</small><small dir="auto">${esc(d.lines.join(' · '))}</small></div></div>`).join('')}</div>` : ''}
+      ${o.files.length || !closed && st !== 'delivered' ? `<div class="label" style="margin:16px 0 8px">Other files (optional) · <span class="ar">ملفات أخرى</span></div>
+        <div class="files">${o.files.map((f) => fileChip(f, `/api/ws/orders/${o.id}/files/${f.id}`, st === 'pending' ? f.id : null)).join('')}</div>
+        ${!closed && st !== 'delivered' ? `<label class="btn block file-btn" style="margin-bottom:12px">${icon.clip}Add a file · <span class="ar">ارفع ملف</span><input type="file" data-add-file accept="image/png,image/jpeg,image/webp,application/pdf" multiple hidden /></label>` : ''}` : ''}
       ${o.has_invoice && ACTIVE.includes(st) ? `<a class="btn primary block" href="/api/ws/orders/${o.id}/invoice.pdf" download="YallaWear-${o.order_no}.pdf">${icon.down}Download invoice · <span class="ar">تحميل الفاتورة</span></a>` : ACTIVE.includes(st) ? '<p class="muted" style="font-size:13px">The invoice will be here soon. · <span class="ar">الفاتورة قريباً</span></p>' : ''}
       ${st === 'pending' ? `<div class="actions-grid" style="margin-top:10px"><button class="btn" data-edit>${icon.edit}Change order</button><button class="btn danger" data-cancel>Cancel order</button></div>` : ''}
       ${contact ? `<a class="btn wa block" style="margin-top:10px" href="${contact}" target="_blank" rel="noopener">${icon.wa}Message Yalla Wear about this order</a>` : ''}
@@ -510,10 +609,13 @@
     const ed = $('[data-edit]', sh);
     if (ed) ed.onclick = () => {
       // load the order back into the grid
-      P.cart = {}; P.print = {}; P.own = []; P.files = [];
+      P.cart = {}; P.print = {}; P.own = []; P.designs = {}; P.pdesign = {};
+      for (const d of o.designs) if (d.key) P.designs[d.key] = { name: d.name || '', front: d.front, back: d.back };
       for (const it of o.items) {
-        if (it.own) { P.own.push({ garment: it.product, color: it.color, hex: it.hex, size: it.size, qty: it.qty, print_type: it.print_type }); continue; }
+        const key = it.print_type !== 'none' ? it.design_key || newKey() : '';
+        if (it.own) { P.own.push({ garment: it.product, color: it.color, hex: it.hex, size: it.size, qty: it.qty, print_type: it.print_type, design_key: key || newKey() }); continue; }
         const k = `${it.color_id}:${it.size_id}`; P.cart[k] = (P.cart[k] || 0) + it.qty; P.print[it.product_id] = it.print_type;
+        if (key && !P.pdesign[it.product_id]) P.pdesign[it.product_id] = key;
       }
       P.mode = P.own.length && !Object.keys(P.cart).length ? 'own' : 'stock';
       P.note = o.customer_note; P.editing = { id: o.id, no: o.order_no };

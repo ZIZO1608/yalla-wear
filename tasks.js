@@ -94,17 +94,17 @@ module.exports = function tasks(ctx) {
     } else {
       const o = db.prepare('SELECT o.*, w.business_name FROM ws_orders o JOIN wholesalers w ON w.id = o.wholesaler_id WHERE o.id = ?').get(id);
       if (!o) return null;
-      items = db.prepare('SELECT qty, print_type, own, product_name product, color_name color, size_name size, color_hex hex FROM ws_order_items WHERE order_id = ? ORDER BY id').all(id);
+      items = db.prepare('SELECT qty, print_type, own, design_name, product_name product, color_name color, size_name size, color_hex hex FROM ws_order_items WHERE order_id = ? ORDER BY id').all(id);
       base = {
         kind: 'ws', no: 'WS-' + pad(id), client: o.business_name, who: o.business_name,
         alive: !['rejected', 'cancelled'].includes(o.status), accepted: ACTIVE_WS.includes(o.status), delivered: o.status === 'delivered',
         total: o.total, paid: !!o.paid, status: o.status, due: o.due_date, gift: false, created_by: o.created_by,
       };
     }
-    const lines = items.map((i) => ({ qty: i.qty, own: !!i.own, product: i.own ? `${i.product} (theirs)` : i.product, color: i.color, size: i.size, hex: i.hex, print: i.print_type || 'none' }));
+    const lines = items.map((i) => ({ qty: i.qty, own: !!i.own, design: i.design_name || '', product: i.own ? `${i.product} (theirs)` : i.product, color: i.color, size: i.size, hex: i.hex, print: i.print_type || 'none' }));
     return { ...base, lines, printLines: lines.filter((l) => l.print !== 'none'), pcs: lines.reduce((t, l) => t + l.qty, 0) };
   }
-  const detailsOf = (lines) => lines.map((l) => `${l.qty}× ${l.product} ${l.color} ${l.size}${l.print !== 'none' ? ' — ' + PRINT[l.print] : ''}`).join('\n');
+  const detailsOf = (lines) => lines.map((l) => `${l.qty}× ${l.product} ${l.color} ${l.size}${l.print !== 'none' ? ' — ' + PRINT[l.print] + (l.design ? ` · “${l.design}”` : '') : ''}`).join('\n');
   const titleFor = (list, info) => `${info.no} · ${info.who}`;
 
   const insertTask = (f) => db.prepare(`INSERT INTO tasks (list, assignee, title, details, items_json, source_type, source_id, parent_id, due_date, created_at, created_by, updated_at)

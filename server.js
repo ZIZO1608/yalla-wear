@@ -318,7 +318,7 @@ app.disable('x-powered-by');
 app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.use('/api/sales/:id/receipt', express.json({ limit: '12mb' }));
 app.use('/api/ws-orders/:id/invoice', express.json({ limit: '12mb' }));
-app.use(['/api/ws-orders/:id/files', '/api/ws/orders/:id/files'], express.json({ limit: '12mb' }));
+app.use(['/api/ws-orders/:id/files', '/api/ws/orders/:id/files', '/api/ws/design-files', '/api/ws-orders/:id/design-files'], express.json({ limit: '12mb' }));
 app.use(express.json({ limit: '3mb' }));
 app.use(cookieParser());
 

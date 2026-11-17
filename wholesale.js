@@ -66,6 +66,19 @@ module.exports = function wholesale(ctx) {
   if (!db.prepare('PRAGMA table_info(ws_orders)').all().some((c) => c.name === 'own_received')) db.exec('ALTER TABLE ws_orders ADD COLUMN own_received INTEGER NOT NULL DEFAULT 0');
   const FILES_DIR = path.join(path.dirname(RECEIPTS_DIR), 'ws-files');
   fs.mkdirSync(FILES_DIR, { recursive: true });
+  // designs: every printed line belongs to a design (a name + a front image, and a back image for front + back).
+  // Lines that share a design share its design_key. The images are uploaded first (order_id empty), then joined to the order when it is sent.
+  {
+    const cols = db.prepare('PRAGMA table_info(ws_order_items)').all().map((c) => c.name);
+    if (!cols.includes('design_key')) db.exec("ALTER TABLE ws_order_items ADD COLUMN design_key TEXT NOT NULL DEFAULT ''");
+    if (!cols.includes('design_name')) db.exec("ALTER TABLE ws_order_items ADD COLUMN design_name TEXT NOT NULL DEFAULT ''");
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS ws_design_files (
+    id INTEGER PRIMARY KEY, wholesaler_id INTEGER NOT NULL REFERENCES wholesalers(id), order_id INTEGER REFERENCES ws_orders(id),
+    design_key TEXT NOT NULL, side TEXT NOT NULL CHECK (side IN ('front','back')), token TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL, by_name TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS idx_wsdf_key ON ws_design_files(wholesaler_id, design_key);
+  CREATE INDEX IF NOT EXISTS idx_wsdf_order ON ws_design_files(order_id);`);
   if (!db.prepare('PRAGMA table_info(movements)').all().some((c) => c.name === 'ws_order_id')) db.exec('ALTER TABLE movements ADD COLUMN ws_order_id INTEGER');
   const addSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   addSetting.run('ws_welcome', 'Welcome to Yalla Wear wholesale. Pick colors and sizes, send your order, and follow it here.');
@@ -108,12 +121,14 @@ module.exports = function wholesale(ctx) {
       FROM ws_orders o JOIN wholesalers w ON w.id = o.wholesaler_id WHERE o.id = ?`).get(id);
     if (!o) return null;
     o.order_no = orderNo(o.id);
-    o.items = db.prepare(`SELECT id, product_id, color_id, size_id, qty, unit_price, print_type, print_price, line_total, from_stock, own,
+    o.items = db.prepare(`SELECT id, product_id, color_id, size_id, qty, unit_price, print_type, print_price, line_total, from_stock, own, design_key, design_name,
         product_name product, product_name_ar product_ar, color_name color, color_name_ar color_ar, color_hex hex, size_name size
       FROM ws_order_items WHERE order_id = ? ORDER BY id`).all(id);
     o.events = db.prepare('SELECT created_at, by_name, kind, status, note FROM ws_order_events WHERE order_id = ? ORDER BY id').all(id);
     o.files = db.prepare('SELECT id, name, mime, size, created_at, by_name FROM ws_order_files WHERE order_id = ? ORDER BY id').all(id);
     o.own_pcs = o.items.filter((i) => i.own).reduce((t, i) => t + i.qty, 0);
+    o.designs = designsOf(id, o.items);
+    o.designs_missing = o.designs.filter((d) => !d.complete).length;
     o.has_invoice = !!(o.invoice_token && fs.existsSync(path.join(RECEIPTS_DIR, `ws-${o.invoice_token}.pdf`)));
     o.invoice_stale = o.has_invoice && o.invoice_for !== o.updated_at;
     delete o.invoice_token;
@@ -123,6 +138,30 @@ module.exports = function wholesale(ctx) {
     }
     return o;
   }
+  // the designs of an order, from its printed lines + the images joined to it
+  function designsOf(orderId, items) {
+    const files = db.prepare('SELECT id, design_key, side, name, mime, size, created_at, by_name FROM ws_design_files WHERE order_id = ? ORDER BY id').all(orderId);
+    const groups = new Map();
+    for (const it of items) {
+      if (it.print_type === 'none') continue;
+      const k = it.design_key || '';
+      const g = groups.get(k) || { key: k, name: '', print_type: 'front', pcs: 0, item_ids: [], lines: [] };
+      if (it.print_type === 'front_back') g.print_type = 'front_back';
+      if (!g.name && it.design_name) g.name = it.design_name;
+      g.pcs += it.qty;
+      g.item_ids.push(it.id);
+      g.lines.push(`${it.qty}× ${it.product} ${it.color} ${it.size}${it.own ? ' (theirs)' : ''}`);
+      groups.set(k, g);
+    }
+    return [...groups.values()].map((g) => {
+      const last = (side) => (g.key ? files.filter((f) => f.design_key === g.key && f.side === side).pop() || null : null);
+      g.front = last('front');
+      g.back = g.print_type === 'front_back' ? last('back') : null;
+      g.complete = !!(g.key && g.name && g.front && (g.print_type !== 'front_back' || g.back));
+      return g;
+    });
+  }
+  const KEY_RE = /^[a-z0-9]{6,32}$/;
   const event = (orderId, by, kind, status = null, note = '') =>
     db.prepare('INSERT INTO ws_order_events (order_id, created_at, by_name, kind, status, note) VALUES (?,?,?,?,?,?)').run(orderId, nowISO(), by, kind, status, str(note, 300));
 
@@ -164,6 +203,16 @@ module.exports = function wholesale(ctx) {
       if (unit < 0) throw new HttpError(400, 'Price cannot be negative');
       return { ...v, qty, unit, printType, printPrice: printPriceFor(v, printType) };
     });
+    // the design of each printed line (saved lines keep theirs unless a new one is sent)
+    lines.forEach((l, i) => {
+      const it = rawItems[i] || {};
+      const old = l.id ? oldItems.find((o) => o.id === l.id) : null;
+      if (l.printType === 'none') { l.designKey = ''; l.designName = ''; return; }
+      const key = it.design_key != null ? String(it.design_key) : old ? old.design_key : '';
+      if (key && !KEY_RE.test(key)) throw new HttpError(400, 'Bad design — refresh the page and try again');
+      l.designKey = key;
+      l.designName = it.design_name != null ? str(it.design_name, 60) : old ? old.design_name : '';
+    });
     if (!asAdmin) {
       // the least pieces per product in one order
       const per = {};
@@ -176,16 +225,16 @@ module.exports = function wholesale(ctx) {
     return lines;
   }
   const insertLine = (orderId, l) => db.prepare(`INSERT INTO ws_order_items (order_id,product_id,color_id,size_id,product_name,product_name_ar,color_name,color_name_ar,color_hex,size_name,
-      qty,unit_price,print_type,print_price,line_total,own) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      qty,unit_price,print_type,print_price,line_total,own,design_key,design_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(orderId, l.product_id, l.color_id, l.size_id, l.product, l.product_ar || '', l.color, l.color_ar || '', l.hex, l.size,
-      l.qty, l.unit, l.printType, l.printPrice, (l.unit + l.printPrice) * l.qty, l.own ? 1 : 0);
+      l.qty, l.unit, l.printType, l.printPrice, (l.unit + l.printPrice) * l.qty, l.own ? 1 : 0, l.designKey || '', l.designName || '');
   function writeLines(orderId, lines, discountRaw) {
     const old = db.prepare('SELECT id FROM ws_order_items WHERE order_id = ?').all(orderId).map((r) => r.id);
     const keep = new Set(lines.filter((l) => l.id).map((l) => l.id));
     for (const id of old) if (!keep.has(id)) db.prepare('DELETE FROM ws_order_items WHERE id = ?').run(id);
     for (const l of lines) {
-      if (l.id) db.prepare('UPDATE ws_order_items SET qty=?, unit_price=?, print_type=?, print_price=?, line_total=?, product_name=?, color_name=?, color_hex=?, size_name=? WHERE id=?')
-        .run(l.qty, l.unit, l.printType, l.printPrice, (l.unit + l.printPrice) * l.qty, l.product, l.color, l.hex, l.size, l.id);
+      if (l.id) db.prepare('UPDATE ws_order_items SET qty=?, unit_price=?, print_type=?, print_price=?, line_total=?, product_name=?, color_name=?, color_hex=?, size_name=?, design_key=?, design_name=? WHERE id=?')
+        .run(l.qty, l.unit, l.printType, l.printPrice, (l.unit + l.printPrice) * l.qty, l.product, l.color, l.hex, l.size, l.designKey || '', l.designName || '', l.id);
       else insertLine(orderId, l);
     }
     const subtotal = lines.reduce((a, l) => a + (l.unit + l.printPrice) * l.qty, 0);
@@ -409,19 +458,30 @@ module.exports = function wholesale(ctx) {
   // design files (logo, artwork) for an order — the wholesaler or you can add them
   const FILE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'application/pdf': 'pdf' };
   const MAX_FILES = 8;
-  function addFile(orderId, body, byName) {
+  // checks an uploaded file (data URL) and writes it to the files folder
+  function saveUpload(body) {
     const m = /^data:([a-z/+.-]+);base64,(.+)$/i.exec(String((body || {}).data || ''));
     if (!m || !FILE_TYPES[m[1].toLowerCase()]) throw new HttpError(400, 'Send a picture (PNG, JPG, WEBP) or a PDF');
     const mime = m[1].toLowerCase();
     const buf = Buffer.from(m[2], 'base64');
     if (!buf.length) throw new HttpError(400, 'That file is empty');
     if (buf.length > 8 * 1024 * 1024) throw new HttpError(400, 'That file is too big (8 MB max)');
-    if (mime === 'application/pdf' && buf.subarray(0, 4).toString() !== '%PDF') throw new HttpError(400, 'Bad PDF');
-    if (db.prepare('SELECT COUNT(*) n FROM ws_order_files WHERE order_id = ?').get(orderId).n >= MAX_FILES) throw new HttpError(400, `Up to ${MAX_FILES} files per order`);
+    const magic = buf.subarray(0, 12);
+    const looksRight = mime === 'application/pdf' ? magic.subarray(0, 4).toString() === '%PDF'
+      : mime === 'image/png' ? magic[0] === 0x89 && magic.subarray(1, 4).toString() === 'PNG'
+        : mime === 'image/jpeg' ? magic[0] === 0xff && magic[1] === 0xd8
+          : magic.subarray(0, 4).toString() === 'RIFF' && magic.subarray(8, 12).toString() === 'WEBP';
+    if (!looksRight) throw new HttpError(400, 'That file looks broken — try another one');
     const token = crypto.randomBytes(16).toString('hex');
     fs.writeFileSync(path.join(FILES_DIR, `${token}.${FILE_TYPES[mime]}`), buf);
     const name = str((body || {}).name, 80).replace(/[\\/:*?"<>|]+/g, '_') || `design.${FILE_TYPES[mime]}`;
-    db.prepare('INSERT INTO ws_order_files (order_id, token, name, mime, size, created_at, by_name) VALUES (?,?,?,?,?,?,?)').run(orderId, token, name, mime, buf.length, nowISO(), byName);
+    return { token, mime, size: buf.length, name };
+  }
+  const dropStored = (token, mime) => fs.rm(path.join(FILES_DIR, `${token}.${FILE_TYPES[mime]}`), { force: true }, () => {});
+  function addFile(orderId, body, byName) {
+    if (db.prepare('SELECT COUNT(*) n FROM ws_order_files WHERE order_id = ?').get(orderId).n >= MAX_FILES) throw new HttpError(400, `Up to ${MAX_FILES} files per order`);
+    const { token, mime, size, name } = saveUpload(body);
+    db.prepare('INSERT INTO ws_order_files (order_id, token, name, mime, size, created_at, by_name) VALUES (?,?,?,?,?,?,?)').run(orderId, token, name, mime, size, nowISO(), byName);
     db.prepare('UPDATE ws_orders SET updated_at = ? WHERE id = ?').run(nowISO(), orderId);
   }
   function removeFile(orderId, fileId) {
@@ -452,6 +512,104 @@ module.exports = function wholesale(ctx) {
     try { const id = int(req.params.id); removeFile(id, int(req.params.fid)); res.json({ order: orderFull(id) }); } catch (e) { next(e); }
   });
   app.get('/api/ws-orders/:id/files/:fid', auth, (req, res) => sendFile(int(req.params.id), int(req.params.fid), res));
+
+  // ---------- design images (front / back) ----------
+  const designFileOut = (f) => ({ id: f.id, design_key: f.design_key, side: f.side, name: f.name, mime: f.mime, size: f.size });
+  function sendDesignFile(f, res) {
+    const file = f && path.join(FILES_DIR, `${f.token}.${FILE_TYPES[f.mime]}`);
+    if (!file || !fs.existsSync(file)) return res.status(404).json({ error: 'File not found' });
+    res.setHeader('Content-Type', f.mime);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`);
+    res.sendFile(file);
+  }
+  // keeps only the newest image per design + side on an order
+  function tidyDesignFiles(orderId) {
+    const rows = db.prepare('SELECT id, design_key, side, token, mime FROM ws_design_files WHERE order_id = ? ORDER BY id DESC').all(orderId);
+    const seen = new Set();
+    for (const r of rows) {
+      const k = `${r.design_key}:${r.side}`;
+      if (!seen.has(k)) { seen.add(k); continue; }
+      db.prepare('DELETE FROM ws_design_files WHERE id = ?').run(r.id);
+      dropStored(r.token, r.mime);
+    }
+  }
+  // joins the uploaded images to the order (and lets go of the ones it no longer uses)
+  function attachDesigns(orderId, wholesalerId) {
+    const keys = db.prepare("SELECT DISTINCT design_key k FROM ws_order_items WHERE order_id = ? AND print_type <> 'none' AND design_key <> ''").all(orderId).map((r) => r.k);
+    const inK = keys.length ? `(${keys.map(() => '?').join(',')})` : "('')";
+    db.prepare(`UPDATE ws_design_files SET order_id = NULL WHERE order_id = ? AND design_key NOT IN ${inK}`).run(orderId, ...keys);
+    if (keys.length) db.prepare(`UPDATE ws_design_files SET order_id = ? WHERE wholesaler_id = ? AND (order_id IS NULL OR order_id = ?) AND design_key IN ${inK}`).run(orderId, wholesalerId, orderId, ...keys);
+    tidyDesignFiles(orderId);
+  }
+  // a wholesaler must give every print a name and its images before sending
+  function checkDesigns(lines, wholesalerId, orderId) {
+    const groups = new Map();
+    for (const l of lines) {
+      if (l.printType === 'none') continue;
+      const what = l.own ? `${l.product} ${l.color}` : l.product;
+      if (!l.designKey) throw new HttpError(400, `Add the design for ${what} · أضف التصميم`);
+      const g = groups.get(l.designKey) || { name: l.designName, what, back: false };
+      if (l.printType === 'front_back') g.back = true;
+      if (!g.name && l.designName) g.name = l.designName;
+      groups.set(l.designKey, g);
+    }
+    const has = (key, side) => !!db.prepare('SELECT 1 FROM ws_design_files WHERE wholesaler_id = ? AND design_key = ? AND side = ? AND (order_id IS NULL OR order_id = ?)').get(wholesalerId, key, side, orderId || 0);
+    for (const [key, g] of groups) {
+      if (!g.name) throw new HttpError(400, `Write a name for the design of ${g.what} · اكتب اسم التصميم`);
+      if (!has(key, 'front')) throw new HttpError(400, `Add the FRONT image for “${g.name}” · أضف صورة الأمام`);
+      if (g.back && !has(key, 'back')) throw new HttpError(400, `Add the BACK image for “${g.name}” · أضف صورة الخلف`);
+    }
+  }
+  // drafts nobody sent within 30 days are removed
+  try {
+    const old = new Date(Date.now() - 30 * 864e5).toISOString();
+    for (const r of db.prepare('SELECT id, token, mime FROM ws_design_files WHERE order_id IS NULL AND created_at < ?').all(old)) {
+      db.prepare('DELETE FROM ws_design_files WHERE id = ?').run(r.id);
+      dropStored(r.token, r.mime);
+    }
+  } catch (e) { console.warn('[yalla] design cleanup', e.message); }
+
+  // you can add / replace a design's images and rename it, or give printed lines without a design one
+  app.post('/api/ws-orders/:id/design-files', auth, (req, res, next) => {
+    try {
+      const id = int(req.params.id);
+      const b = req.body || {};
+      const o = db.prepare('SELECT * FROM ws_orders WHERE id = ?').get(id);
+      if (!o) throw new HttpError(404, 'Order not found');
+      const side = b.side === 'back' ? 'back' : 'front';
+      const key = String(b.design_key || '');
+      if (!KEY_RE.test(key) || !db.prepare("SELECT 1 FROM ws_order_items WHERE order_id = ? AND design_key = ? AND print_type <> 'none'").get(id, key)) throw new HttpError(400, 'That design is not on this order');
+      const up = saveUpload(b);
+      db.prepare('INSERT INTO ws_design_files (wholesaler_id, order_id, design_key, side, token, name, mime, size, created_at, by_name) VALUES (?,?,?,?,?,?,?,?,?,?)')
+        .run(o.wholesaler_id, id, key, side, up.token, up.name, up.mime, up.size, nowISO(), req.user);
+      tidyDesignFiles(id);
+      db.prepare('UPDATE ws_orders SET updated_at = ? WHERE id = ?').run(nowISO(), id);
+      event(id, req.user, 'edited', null, `New ${side} image for a design`);
+      res.json({ order: orderFull(id) });
+    } catch (e) { next(e); }
+  });
+  app.post('/api/ws-orders/:id/designs', auth, (req, res, next) => {
+    try {
+      const id = int(req.params.id);
+      const b = req.body || {};
+      if (!db.prepare('SELECT 1 FROM ws_orders WHERE id = ?').get(id)) throw new HttpError(404, 'Order not found');
+      const name = str(b.name, 60);
+      if (!name) throw new HttpError(400, 'Write the design name');
+      let key = String(b.design_key || '');
+      if (key && !KEY_RE.test(key)) throw new HttpError(400, 'Bad design');
+      if (Array.isArray(b.item_ids) && b.item_ids.length) {
+        key = key || crypto.randomBytes(6).toString('hex');
+        const set = db.prepare("UPDATE ws_order_items SET design_key = ?, design_name = ? WHERE id = ? AND order_id = ? AND print_type <> 'none'");
+        for (const iid of b.item_ids) set.run(key, name, int(iid), id);
+      } else if (key) db.prepare('UPDATE ws_order_items SET design_name = ? WHERE order_id = ? AND design_key = ?').run(name, id, key);
+      else throw new HttpError(400, 'Pick the items for this design');
+      db.prepare('UPDATE ws_orders SET updated_at = ? WHERE id = ?').run(nowISO(), id);
+      res.json({ order: orderFull(id), design_key: key });
+    } catch (e) { next(e); }
+  });
+  app.get('/api/ws-design-files/:fid', auth, (req, res) => sendDesignFile(db.prepare('SELECT * FROM ws_design_files WHERE id = ?').get(int(req.params.fid)), res));
 
   // the invoice PDF drawn in the admin app
   app.post('/api/ws-orders/:id/invoice', auth, (req, res, next) => {
@@ -563,10 +721,12 @@ module.exports = function wholesale(ctx) {
       const b = req.body || {};
       const id = db.transaction(() => {
         const lines = buildLines(b.items);
+        checkDesigns(lines, req.ws.id, null);
         const now = nowISO();
         const oid = db.prepare(`INSERT INTO ws_orders (wholesaler_id, created_at, created_by, customer_note, updated_at) VALUES (?,?,?,?,?)`)
           .run(req.ws.id, now, req.ws.username, str(b.note, 500), now).lastInsertRowid;
         writeLines(oid, lines, 0);
+        attachDesigns(oid, req.ws.id);
         event(oid, req.ws.business_name, 'created', 'pending', '');
         return oid;
       })();
@@ -581,7 +741,10 @@ module.exports = function wholesale(ctx) {
       db.transaction(() => {
         const o = ownOrder(req);
         if (o.status !== 'pending') throw new HttpError(409, 'This order is already being handled — message us to change it');
-        writeLines(o.id, buildLines(b.items), 0);
+        const lines = buildLines(b.items);
+        checkDesigns(lines, req.ws.id, o.id);
+        writeLines(o.id, lines, 0);
+        attachDesigns(o.id, req.ws.id);
         db.prepare('UPDATE ws_orders SET customer_note = ?, updated_at = ? WHERE id = ?').run(str(b.note, 500), nowISO(), o.id);
         event(o.id, req.ws.business_name, 'edited', null, 'Order changed');
       })();
@@ -620,6 +783,30 @@ module.exports = function wholesale(ctx) {
   app.get('/api/ws/orders/:id/files/:fid', wsAuth, (req, res, next) => {
     try { const o = ownOrder(req); sendFile(o.id, int(req.params.fid), res); } catch (e) { next(e); }
   });
+  // design images are uploaded as soon as they are picked, then joined to the order when it is sent
+  app.post('/api/ws/design-files', wsAuth, (req, res, next) => {
+    try {
+      const b = req.body || {};
+      const key = String(b.design_key || '');
+      if (!KEY_RE.test(key)) throw new HttpError(400, 'Bad design — refresh the page and try again');
+      const side = b.side === 'back' ? 'back' : 'front';
+      const busy = db.prepare(`SELECT 1 FROM ws_design_files f JOIN ws_orders o ON o.id = f.order_id
+        WHERE f.wholesaler_id = ? AND f.design_key = ? AND o.status <> 'pending'`).get(req.ws.id, key);
+      if (busy) throw new HttpError(409, 'This design is already being printed — message us to change it');
+      if (db.prepare('SELECT COUNT(*) n FROM ws_design_files WHERE wholesaler_id = ? AND order_id IS NULL').get(req.ws.id).n >= 60) throw new HttpError(400, 'Too many images waiting — send your order first');
+      const up = saveUpload(b);
+      // replaces the earlier draft for the same design + side
+      for (const r of db.prepare('SELECT id, token, mime FROM ws_design_files WHERE wholesaler_id = ? AND design_key = ? AND side = ? AND order_id IS NULL').all(req.ws.id, key, side)) {
+        db.prepare('DELETE FROM ws_design_files WHERE id = ?').run(r.id);
+        dropStored(r.token, r.mime);
+      }
+      const fid = db.prepare('INSERT INTO ws_design_files (wholesaler_id, order_id, design_key, side, token, name, mime, size, created_at, by_name) VALUES (?,?,?,?,?,?,?,?,?,?)')
+        .run(req.ws.id, null, key, side, up.token, up.name, up.mime, up.size, nowISO(), req.ws.business_name).lastInsertRowid;
+      res.json({ file: designFileOut(db.prepare('SELECT * FROM ws_design_files WHERE id = ?').get(fid)) });
+    } catch (e) { next(e); }
+  });
+  app.get('/api/ws/design-files/:fid', wsAuth, (req, res) =>
+    sendDesignFile(db.prepare('SELECT * FROM ws_design_files WHERE id = ? AND wholesaler_id = ?').get(int(req.params.fid), req.ws.id), res));
   app.get('/api/ws/orders/:id/invoice.pdf', wsAuth, (req, res, next) => {
     try { ownOrder(req); sendInvoice(orderFull(int(req.params.id), true), res); } catch (e) { next(e); }
   });
