@@ -288,6 +288,11 @@ function buildState() {
   const monthPieces = db.prepare(`SELECT COALESCE(SUM(i.qty),0) n FROM sale_items i JOIN sales s ON s.id = i.sale_id
     WHERE s.cancelled_at IS NULL AND s.created_at >= ?`).get(since).n;
   const unpaid = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(total),0) amount FROM sales WHERE cancelled_at IS NULL AND paid = 0`).get();
+  // money box on the dashboard: what came in this month vs what is still owed
+  const monthPaid = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(total),0) amount FROM sales
+    WHERE cancelled_at IS NULL AND paid = 1 AND created_at >= ?`).get(since);
+  const unpaidOldest = db.prepare(`SELECT id, customer_name, total, created_at FROM sales
+    WHERE cancelled_at IS NULL AND paid = 0 ORDER BY created_at ASC, id ASC LIMIT 3`).all();
   const best = db.prepare(`SELECT i.product_name product, i.color_name color, i.color_hex hex, i.size_name size, SUM(i.qty) n
     FROM sale_items i JOIN sales x ON x.id = i.sale_id WHERE x.cancelled_at IS NULL AND x.created_at >= ?
     GROUP BY i.color_id, i.size_id ORDER BY n DESC LIMIT 1`).get(since) || null;
@@ -301,6 +306,7 @@ function buildState() {
       in_stock: db.prepare(`SELECT COALESCE(SUM(st.qty),0) n ${ACTIVE_STOCK}`).get().n,
       month_sales: month.sales, month_pieces: monthPieces, month_revenue: month.revenue,
       unpaid_count: unpaid.n, unpaid_amount: unpaid.amount, best_seller: best,
+      month_paid_count: monthPaid.n, month_paid_amount: monthPaid.amount, unpaid_oldest: unpaidOldest,
       ws_pending: db.prepare("SELECT COUNT(*) n FROM ws_orders WHERE status = 'pending'").get().n,
       // per person; '' = the whole team (orders to prepare and deliver)
       tasks_open: Object.fromEntries(db.prepare("SELECT assignee, COUNT(*) n FROM tasks WHERE status = 'open' GROUP BY assignee").all().map((r) => [r.assignee, r.n])),
@@ -560,6 +566,7 @@ app.get('/api/sales', auth, (req, res) => {
     params.push(`%${q}%`, `%${q}%`, `%${q.replace(/^@/, '')}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
   if (status === 'unpaid') where.push('paid = 0 AND cancelled_at IS NULL');
+  if (status === 'paid') where.push('paid = 1 AND cancelled_at IS NULL');
   if (status === 'cancelled') where.push('cancelled_at IS NOT NULL');
   const ids = db.prepare(`SELECT id FROM sales ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT 300`).all(...params);
   res.json({ sales: ids.map((r) => saleWithItems(r.id)) });
@@ -618,6 +625,34 @@ app.post('/api/sales/:id/restore', auth, (req, res, next) => {
     })();
     fire('saleChanged', id, req.user);
     res.json({ sale: saleWithItems(id), state: buildState() });
+  } catch (e) { next(e); }
+});
+
+// Delete a sale for good. Only a cancelled sale can go (its pieces are already back in stock),
+// so money and stock never change here. Its to-do tasks go with it; the stock history keeps its lines.
+app.delete('/api/sales/:id', auth, (req, res, next) => {
+  try {
+    const id = int(req.params.id);
+    let token = null;
+    db.transaction(() => {
+      const sale = db.prepare('SELECT id, cancelled_at, receipt_token FROM sales WHERE id = ?').get(id);
+      if (!sale) throw new HttpError(404, 'Sale not found');
+      if (!sale.cancelled_at) throw new HttpError(409, 'Cancel the sale first — then it can be deleted');
+      const taskIds = db.prepare("SELECT id FROM tasks WHERE source_type = 'sale' AND source_id = ?").all(id).map((t) => t.id);
+      if (taskIds.length) {
+        const marks = taskIds.map(() => '?').join(',');
+        db.prepare(`UPDATE tasks SET parent_id = NULL WHERE parent_id IN (${marks})`).run(...taskIds);
+        db.prepare(`DELETE FROM tasks WHERE id IN (${marks})`).run(...taskIds);
+      }
+      db.prepare('DELETE FROM sale_items WHERE sale_id = ?').run(id);
+      db.prepare('DELETE FROM sales WHERE id = ?').run(id);
+      token = sale.receipt_token;
+    })();
+    // the receipt link stops working with the sale; tidy its files too
+    if (token && /^[a-f0-9]{32}$/.test(token)) {
+      for (const ext of ['pdf', 'jpg', 'og.jpg']) fs.rm(path.join(RECEIPTS_DIR, `${token}.${ext}`), { force: true }, () => {});
+    }
+    res.json({ ok: true, state: buildState() });
   } catch (e) { next(e); }
 });
 

@@ -82,6 +82,7 @@
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
     csv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
     undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>',
     chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
@@ -327,8 +328,7 @@
         <div class="kpi accent"><div class="kpi-label">In stock</div><div class="kpi-value num"><span data-count="${stats.in_stock}">${fmt(stats.in_stock)}</span><small>pcs</small></div><div class="kpi-foot">${plist.length} product${plist.length === 1 ? '' : 's'}</div></div>
         <div class="kpi"><div class="kpi-label">Sold this month</div><div class="kpi-value num"><span data-count="${stats.month_pieces}">${fmt(stats.month_pieces)}</span><small>pcs</small></div><div class="kpi-foot">${best ? `Top: ${esc(multi() ? best.product + ' ' : '')}${esc(best.color)} ${esc(best.size)} (${best.n})` : `${stats.month_sales} sales`}</div></div>
         <div class="kpi"><div class="kpi-label">Revenue this month</div><div class="kpi-value num"><span data-count="${stats.month_revenue}">${fmt(stats.month_revenue)}</span><small>${esc(cur())}</small></div><div class="kpi-foot">${stats.month_sales} sale${stats.month_sales === 1 ? '' : 's'}</div></div>
-        <div class="kpi ${stats.unpaid_amount ? 'warn' : ''}"><div class="kpi-label">Unpaid</div><div class="kpi-value num"><span data-count="${stats.unpaid_amount}">${fmt(stats.unpaid_amount)}</span><small>${esc(cur())}</small></div><div class="kpi-foot">${stats.unpaid_count} sale${stats.unpaid_count === 1 ? '' : 's'} not paid yet</div></div>
-      </section>`;
+      </section>${moneyBox(stats)}`;
 
     const tabs = `
       <div class="prod-tabs" role="tablist">
@@ -340,6 +340,7 @@
       $('#view').innerHTML = kpis + tabs + `<div class="empty"><div class="em-ic">${icon.box}</div><b>No products yet</b>Add your first product — hoodies, t-shirts, shorts…<div style="margin-top:14px"><button class="btn primary" id="btn-first-product">${icon.plus}Add product</button></div></div>`;
       $('#btn-add-product').onclick = () => openProductEditor();
       $('#btn-first-product').onclick = () => openProductEditor();
+      wireMoneyBox();
       return;
     }
 
@@ -398,6 +399,7 @@
         </div></div>
       </section>`;
 
+    wireMoneyBox();
     $$('.prod-tab[data-pid]').forEach((b) => (b.onclick = () => { S.pid = +b.dataset.pid; renderStock(); }));
     $('#btn-add-product').onclick = () => openProductEditor();
     $$('[data-edit-product]').forEach((b) => (b.onclick = () => openProductEditor(pid)));
@@ -406,6 +408,48 @@
     $('#btn-history').onclick = openHistory;
     const on = $('.prod-tab.on');
     if (on) on.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }
+
+  // ---------- money box: paid vs not paid ----------
+  const daysAgo = (iso) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
+  const ageLabel = (d) => (d === 0 ? 'today' : d === 1 ? '1 day' : `${d} days`);
+  function moneyBox(stats) {
+    const paid = stats.month_paid_amount || 0, owed = stats.unpaid_amount || 0;
+    const sum = paid + owed;
+    const pct = sum ? Math.round((paid / sum) * 100) : 100;
+    const oldest = stats.unpaid_oldest || [];
+    const mood = !owed ? 'all-clear' : pct >= 75 ? 'good' : pct >= 40 ? 'mid' : 'bad';
+    return `
+      <section class="money ${mood}" aria-label="Paid and not paid">
+        <div class="money-head">
+          <div class="kpi-label">Paid vs not paid</div>
+          <div class="money-pct"><b class="num">${pct}%</b> in hand</div>
+        </div>
+        <div class="money-sides">
+          <button class="money-side paid" data-money="paid">
+            <span class="ms-top"><i class="ms-dot"></i>Paid <em>this month</em></span>
+            <span class="ms-val num"><span data-count="${paid}">${fmt(paid)}</span><small>${esc(cur())}</small></span>
+            <span class="ms-foot">${stats.month_paid_count} sale${stats.month_paid_count === 1 ? '' : 's'} paid ${icon.chevron}</span>
+          </button>
+          <button class="money-side unpaid" data-money="unpaid">
+            <span class="ms-top"><i class="ms-dot"></i>Not paid <em>waiting</em></span>
+            <span class="ms-val num"><span data-count="${owed}">${fmt(owed)}</span><small>${esc(cur())}</small></span>
+            <span class="ms-foot">${stats.unpaid_count ? `${stats.unpaid_count} sale${stats.unpaid_count === 1 ? '' : 's'} to collect` : 'Nothing to collect'} ${icon.chevron}</span>
+          </button>
+        </div>
+        <div class="money-bar" role="img" aria-label="${pct}% paid"><i class="mb-paid" style="width:${pct}%"></i><i class="mb-unpaid" style="width:${100 - pct}%"></i></div>
+        ${owed ? `<div class="money-chase">
+          <span class="mc-lbl">Collect first</span>
+          ${oldest.map((o) => { const d = daysAgo(o.created_at); return `<button class="mc-chip ${d >= 7 ? 'late' : ''}" data-chase="${o.id}"><span class="mc-who" dir="auto">${esc(o.customer_name)}</span><b class="num">${fmt(o.total)}</b><span class="mc-age">${ageLabel(d)}</span></button>`; }).join('')}
+        </div>` : `<div class="money-clear">🎉 Everyone has paid — nothing to chase.</div>`}
+      </section>`;
+  }
+  function wireMoneyBox() {
+    $$('[data-money]').forEach((b) => (b.onclick = () => {
+      S.salesStatus = b.dataset.money; S.salesQ = ''; S.sales = []; S.enter = true; S.view = 'sales';
+      window.scrollTo(0, 0); renderShell();
+    }));
+    $$('[data-chase]').forEach((b) => (b.onclick = () => openSaleDetail(+b.dataset.chase).catch((e) => toast('err', e.message))));
   }
 
   function openCellActions(cid, sid) {
@@ -1050,7 +1094,8 @@
           <div class="grand"><span>Total</span><b class="num" ${cancelled ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${fmt(sale.total)} <small style="font-size:14px;font-family:var(--ui)">${esc(cur())}</small></b></div>
         </div>
         ${cancelled ? `<p class="muted" style="font-size:13px">Cancelled ${dateFmt(sale.cancelled_at)} by ${esc(sale.cancelled_by)} — the pieces went back to stock.</p>
-        <button class="btn block" data-restore-sale>${icon.undo}Undo cancel — bring this sale back</button>` : `
+        <button class="btn block" data-restore-sale>${icon.undo}Undo cancel — bring this sale back</button>
+        <button class="btn danger block" data-delete-sale style="margin-top:10px">${icon.trash}Delete forever</button>` : `
         <div class="receipt-preview hidden" data-prev></div>
         ${receiptButtons(sale)}
         <button class="btn block" data-edit-sale style="margin-top:10px">${icon.edit}Edit sale (name, items, prices, gift…)</button>
@@ -1064,6 +1109,19 @@
       if (oc) oc.onclick = () => openClient(sale.client_id);
       if (cancelled) {
         $('[data-restore-sale]', sh).onclick = (e) => busy(e.currentTarget, () => restoreSale().catch((err) => toast('err', 'Could not bring it back', err.message)));
+        $('[data-delete-sale]', sh).onclick = async (e) => {
+          const btn = e.currentTarget;
+          const ok = await confirmSheet('Delete forever?', `${invNo(sale.id)} for ${sale.customer_name} and its receipt link will be gone for good. Stock does not change.`, 'Delete forever', true);
+          if (!ok) return;
+          busy(btn, async () => {
+            try {
+              const r = await api(`/api/sales/${sale.id}`, { method: 'DELETE' });
+              S.data = r.state; S.todo = null; S.sales = S.sales.filter((s) => s.id !== sale.id);
+              closeSheet(); renderShell();
+              toast('ok', 'Deleted for good', invNo(sale.id));
+            } catch (err) { toast('err', 'Could not delete', err.message); }
+          });
+        };
         return;
       }
       wireReceiptButtons(sh, sale);
@@ -1124,9 +1182,10 @@
       <div class="toolbar">
         <input class="input" id="sales-q" placeholder="Search client, @instagram, product…" value="${esc(S.salesQ)}" />
         <div class="filter-seg chips">
-          ${[['all', 'All'], ['unpaid', 'Not paid'], ['cancelled', 'Cancelled']].map(([k, l]) => `<button class="chip ${S.salesStatus === k ? 'on' : ''}" data-st="${k}">${l}</button>`).join('')}
+          ${[['all', 'All'], ['paid', 'Paid'], ['unpaid', 'Not paid'], ['cancelled', 'Cancelled']].map(([k, l]) => `<button class="chip ${S.salesStatus === k ? 'on' : ''}" data-st="${k}">${l}</button>`).join('')}
         </div>
       </div>
+      <div class="swipe-hint"><span class="sh-r">→ Swipe right: paid</span><span class="sh-l">Swipe left: delete ←</span></div>
       <div class="sales-list" id="sales-list">${S.sales.length ? '' : '<div class="skel"></div>'.repeat(4)}</div>`;
     if (S.sales.length) paintSalesList();
     let t;
@@ -1142,8 +1201,155 @@
       el.innerHTML = `<div class="empty"><div class="em-ic">${icon.receipt}</div><b>${S.salesQ || S.salesStatus !== 'all' ? 'No sales match' : 'No sales yet'}</b>Tap <span style="color:var(--mint)">New sale</span> below to log the first one.</div>`;
       return;
     }
-    el.innerHTML = S.sales.map(saleRow).join('');
-    $$('.sale', el).forEach((b) => (b.onclick = () => openSaleDetail(+b.dataset.id).catch((e) => toast('err', e.message))));
+    el.innerHTML = S.sales.map((s) => `<div class="swipe ${s.cancelled_at ? 'is-cancelled' : ''}" data-sid="${s.id}">
+      <div class="swipe-under" aria-hidden="true">
+        <span class="su-paid">${s.cancelled_at ? '' : s.paid ? '↩ Not paid' : '✓ Paid'}</span>
+        <span class="su-del">${icon.trash}${s.cancelled_at ? 'Delete forever' : 'Delete'}</span>
+      </div>${saleRow(s)}</div>`).join('');
+    $$('.sale', el).forEach((b) => (b.onclick = () => {
+      if (b._swiped) { b._swiped = false; return; }
+      openSaleDetail(+b.dataset.id).catch((e) => toast('err', e.message));
+    }));
+    $$('.swipe', el).forEach(attachSwipe);
+    peekSwipeOnce(el);
+  }
+
+  // ---------- swipe a sale: right = paid / not paid, left = delete ----------
+  function attachSwipe(row) {
+    const card = $('.sale', row);
+    const id = +row.dataset.sid;
+    let x0 = 0, y0 = 0, dx = 0, mode = null, pid = null;
+    const limit = () => Math.min(140, (row.offsetWidth || 320) * 0.38);
+    const set = (x, anim) => {
+      card.style.transition = anim ? 'transform .28s cubic-bezier(.2,.8,.2,1)' : 'none';
+      card.style.transform = x ? `translateX(${x}px)` : '';
+      row.classList.toggle('to-paid', x > 8);
+      row.classList.toggle('to-del', x < -8);
+      row.classList.toggle('armed', Math.abs(x) >= limit());
+    };
+    card.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || row.classList.contains('is-busy')) return;
+      x0 = e.clientX; y0 = e.clientY; dx = 0; mode = null; pid = e.pointerId;
+    });
+    card.addEventListener('pointermove', (e) => {
+      if (pid !== e.pointerId) return;
+      const mx = e.clientX - x0, my = e.clientY - y0;
+      if (!mode) {
+        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+        mode = Math.abs(mx) > Math.abs(my) * 1.3 ? 'swipe' : 'scroll';
+        if (mode === 'swipe') { try { card.setPointerCapture(pid); } catch { /* old browsers */ } }
+      }
+      if (mode !== 'swipe') return;
+      const sale = S.sales.find((s) => s.id === id);
+      dx = mx;
+      if (dx > 0 && sale && sale.cancelled_at) dx = Math.min(dx, 24) * 0.5; // a cancelled sale can't be paid
+      const L = limit(); // rubber band past the line
+      const shown = Math.abs(dx) > L ? Math.sign(dx) * (L + (Math.abs(dx) - L) * 0.35) : dx;
+      const wasArmed = row.classList.contains('armed');
+      set(shown, false);
+      if (!wasArmed && row.classList.contains('armed') && navigator.vibrate) navigator.vibrate(12);
+    });
+    const end = (e) => {
+      if (pid !== e.pointerId) return;
+      pid = null;
+      if (mode !== 'swipe') return;
+      card._swiped = true; setTimeout(() => { card._swiped = false; }, 350);
+      const armed = Math.abs(dx) >= limit();
+      const sale = S.sales.find((s) => s.id === id);
+      if (!armed || !sale) return set(0, true);
+      if (dx < 0) swipeDelete(row, sale); else if (!sale.cancelled_at) swipePaid(row, sale); else set(0, true);
+    };
+    card.addEventListener('pointerup', end);
+    card.addEventListener('pointercancel', (e) => { if (pid === e.pointerId) { pid = null; set(0, true); } });
+  }
+
+  const resetSwipe = (row) => {
+    const card = $('.sale', row);
+    if (!card) return;
+    card.style.transition = 'transform .28s cubic-bezier(.2,.8,.2,1)'; card.style.transform = '';
+    row.classList.remove('to-paid', 'to-del', 'armed', 'is-busy');
+  };
+  // slides the card away, then folds the row up
+  const flyAway = (row) => new Promise((done) => {
+    if (!row.isConnected) return done();
+    const card = $('.sale', row);
+    const dir = row.classList.contains('to-paid') ? 1 : -1;
+    card.style.transition = 'transform .25s ease-in, opacity .25s'; card.style.transform = `translateX(${dir * 110}%)`; card.style.opacity = '0';
+    setTimeout(() => {
+      row.style.height = row.offsetHeight + 'px';
+      requestAnimationFrame(() => { row.classList.add('folding'); row.style.height = '0px'; });
+      setTimeout(done, 260);
+    }, 230);
+  });
+  const replaceSale = (sale) => { S.sales = S.sales.map((s) => (s.id === sale.id ? sale : s)); };
+  const keepInFilter = (sale) => S.salesStatus === 'all'
+    || (S.salesStatus === 'paid' && sale.paid && !sale.cancelled_at)
+    || (S.salesStatus === 'unpaid' && !sale.paid && !sale.cancelled_at)
+    || (S.salesStatus === 'cancelled' && !!sale.cancelled_at);
+
+  async function swipePaid(row, sale) {
+    row.classList.add('is-busy');
+    const want = !sale.paid;
+    try {
+      const r = await api(`/api/sales/${sale.id}/paid`, { body: { paid: want } });
+      S.data = r.state;
+      if (navigator.vibrate) navigator.vibrate(want ? [10, 40, 10] : 15);
+      replaceSale(r.sale);
+      if (!keepInFilter(r.sale)) { await flyAway(row); S.sales = S.sales.filter((s) => s.id !== sale.id); }
+      if (S.view === 'sales') {
+        paintSalesList();
+        const fresh = $(`.swipe[data-sid="${sale.id}"]`);
+        if (fresh) fresh.classList.add(want ? 'pop-paid' : 'pop-unpaid');
+      }
+      undoable(want ? 'Paid ✓' : 'Marked as not paid', `${invNo(sale.id)} · ${sale.customer_name}`, async () => {
+        const u = await api(`/api/sales/${sale.id}/paid`, { body: { paid: !want } });
+        S.data = u.state; replaceSale(u.sale);
+        if (S.view === 'sales') reloadSales().catch(() => {});
+      });
+    } catch (e) { resetSwipe(row); toast('err', 'Could not save', e.message); }
+  }
+
+  async function swipeDelete(row, sale) {
+    row.classList.add('is-busy');
+    // an active sale is cancelled first: out of the money, pieces back in stock, Undo is one tap
+    if (!sale.cancelled_at) {
+      try {
+        const r = await api(`/api/sales/${sale.id}/cancel`, { body: {} });
+        S.data = r.state;
+        await flyAway(row);
+        S.sales = S.sales.filter((s) => s.id !== sale.id);
+        if (S.view === 'sales') paintSalesList();
+        undoable('Sale deleted', `${invNo(sale.id)} · pieces are back in stock`, async () => {
+          const u = await api(`/api/sales/${sale.id}/restore`, { body: {} });
+          S.data = u.state;
+          toast('ok', 'Sale is back', `${invNo(sale.id)} · ${sale.customer_name}`);
+          if (S.view === 'sales') reloadSales().catch(() => {});
+        });
+      } catch (e) { resetSwipe(row); toast('err', 'Could not delete', e.message); }
+      return;
+    }
+    // a cancelled sale can be wiped for good: this asks first, there is no undo
+    const ok = await confirmSheet('Delete forever?', `${invNo(sale.id)} for ${sale.customer_name} and its receipt link will be gone for good. Stock does not change.`, 'Delete forever', true);
+    if (!ok) return resetSwipe(row);
+    try {
+      const r = await api(`/api/sales/${sale.id}`, { method: 'DELETE' });
+      S.data = r.state; S.todo = null;
+      await flyAway(row);
+      S.sales = S.sales.filter((s) => s.id !== sale.id);
+      if (S.view === 'sales') paintSalesList();
+      toast('ok', 'Deleted for good', invNo(sale.id));
+    } catch (e) { resetSwipe(row); toast('err', 'Could not delete', e.message); }
+  }
+
+  // the first time, the top sale wiggles to show it can be swiped
+  function peekSwipeOnce(list) {
+    let seen = false;
+    try { seen = localStorage.getItem('ys-swipe-peek') === '1'; } catch { /* private mode */ }
+    if (seen) return;
+    const first = $('.swipe:not(.is-cancelled)', list);
+    if (!first) return;
+    try { localStorage.setItem('ys-swipe-peek', '1'); } catch { /* private mode */ }
+    setTimeout(() => { if (first.isConnected) first.classList.add('peek'); }, 500);
   }
 
   function saleRow(s) {
